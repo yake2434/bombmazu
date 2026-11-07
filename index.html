@@ -1270,7 +1270,7 @@ function drawTitle(){
   txt('守護鄉親平安，萬丹始能幸免於難。',200,280,14,'#ffd9a0','center','#1a0606',4);
   const L=[
     ['bomb','用手指把炸彈往上或左右撥開'],
-    ['bomb','炸彈落地扣分(歸0遊戲即失敗)'],
+    ['bomb','炸彈落地扣'+CFG.bombPenalty+'分(歸0遊戲即失敗)'],
     ['charm','護身符落地加'+CFG.charmBonus+'分，別揮走!'],
     ['clock','遊戲時間'+CFG.duration+'秒']
   ];
@@ -1305,6 +1305,31 @@ function drawWin(){
   ctx.restore();
   if(e>1)txt('媽祖護境　村莊平安',200,146,18,'#fff3d0','center','#1a0606',5);
 }
+/* 結算畫面連結（畫在 canvas 上，點擊會另開分頁） */
+const LINKS=[
+  {label:'◎萬丹萬惠宮粉絲專頁',url:'https://www.facebook.com/WanhuiGong',y:669},
+  {label:'◎橙色的品源',url:'https://supr.link/ujJcE',y:687}
+];
+function drawLinks(){
+  ctx.fillStyle='rgba(20,5,5,.78)';ctx.fillRect(0,640,W,60);
+  R('#e0a526',0,640,W,2);
+  txt('迎媽祖相關資料',200,652,13,'#ffe9b0','center',null);
+  for(const L of LINKS){
+    ctx.font='bold 12px "PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif';
+    const w1=ctx.measureText(L.label).width;
+    ctx.font='11px sans-serif';
+    const w2=ctx.measureText(L.url).width,gap=8,x0=200-(w1+gap+w2)/2;
+    txt(L.label,x0,L.y,12,'#ffd24a','left',null);
+    ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillStyle='#8fd0ff';
+    const ux=x0+w1+gap;ctx.fillText(L.url,ux,L.y);
+    ctx.fillRect(ux,L.y+7,w2,1);
+  }
+}
+function linkAt(p){
+  if(!((state==='win'&&endT>2)||(state==='lose'&&endT>1.8)))return null;
+  for(const L of LINKS)if(p.y>=L.y-10&&p.y<=L.y+9&&p.x>=14&&p.x<=386)return L;
+  return null;
+}
 function drawWinPanel(){
   const e=endT;
   if(e<=2)return;
@@ -1318,6 +1343,7 @@ function drawWinPanel(){
   txt('彈開 '+stats.deflected+' 顆　護身符 '+stats.charms+' 張　最高連擊 '+maxCombo,200,360,14,'#ffe9b0','center','#1a0606',4);
   txt('最高紀錄　'+best+(score>=best?'（新紀錄！）':''),200,382,14,'#ffd24a','center','#1a0606',4);
   button('再玩一次');
+  drawLinks();
 }
 function drawLose(){
   const e=endT;
@@ -1336,6 +1362,7 @@ function drawLose(){
     txt('下次一定能守住萬丹！',200,376,14,'#ffd9a0','center','#1a0606',4);
     button('再試一次');
   }
+  if(e>1.8)drawLinks();
 }
 
 function draw(){
@@ -1387,8 +1414,10 @@ function togglePause(){
   if(state!=='play')return;
   paused=!paused;ptrs.clear();trail=[];
 }
+let linkDown=null;
 cv.addEventListener('pointerdown',e=>{
   e.preventDefault();audioInit();
+  linkDown=linkAt(pos(e));if(linkDown)return;
   try{cv.setPointerCapture(e.pointerId)}catch(_){}
   const p=pos(e);
   if(p.x>=358&&p.y<40){muted=!muted;return}
@@ -1417,7 +1446,14 @@ cv.addEventListener('pointermove',e=>{
   q.x=p.x;q.y=p.y;
 });
 const endPtr=e=>{ptrs.delete(e.pointerId)};
-cv.addEventListener('pointerup',endPtr);
+cv.addEventListener('pointerup',e=>{
+  endPtr(e);
+  const L=linkAt(pos(e));
+  if(L&&L===linkDown){try{window.open(L.url,'_blank','noopener,noreferrer')}catch(_){}}
+  linkDown=null;
+});
+cv.addEventListener('pointermove',e=>{cv.style.cursor=linkAt(pos(e))?'pointer':''});
+cv.addEventListener('pointerleave',()=>{cv.style.cursor=''});
 cv.addEventListener('pointercancel',endPtr);
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
