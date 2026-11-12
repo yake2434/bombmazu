@@ -15,7 +15,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
 </head>
 <body>
 <div id="stage"><canvas id="c"></canvas></div>
-<noscript>丁未年三年一科萬丹迎媽祖!116年4月23~25日歡迎來萬丹。</noscript>
+<noscript>請開啟 JavaScript 以遊玩。</noscript>
 <script>
 (()=>{
 'use strict';
@@ -39,7 +39,7 @@ const CFG={
   clusterBonus:15, heavyBonus:20, diveBonus:15,
   heavyPenalty:30, divePenalty:20, splitPenalty:8,   // 各炸彈落地基本扣分
   phase2PenMul:2, bossPenMul:3,                     // 第二階段／Boss 階段扣分倍率
-  eggChance:.6, eggWindow:[15,55],                      // 隱藏彩蛋：紅豆餅出現機率與出現時間範圍(秒)
+  eggChance:.6, eggWindow:[8,48],                      // 隱藏彩蛋：紅豆餅出現機率與出現時間範圍(秒)
   pctPen:.12,                                         // 另外再扣目前分數的 12%（分數越高，漏接越痛）
   chainPen:5, chainMax:3, chainWindow:6,              // 連環爆：6 秒內連續漏接，每次多扣 5（最多 +15）
   bossAt:50, bossHP:8, bossBonus:100         // 最後 10 秒 Boss：把炸彈往上撥砸中它
@@ -263,33 +263,33 @@ const CHARM=[
 ".o.o.o.o."];
 const PAL_C={o:'#b8741a',y:'#ffd24a',r:'#d1281e'};
 const MAZU=[
-"...........R",
-"....RR.RRRRR",
-"...RRrRRrRRR",
-"...GGGGGGGGG",
-"..GgGGGGGJJJ",
-"..GGgGGGeJJJ",
-"..GGGGGGGGGG",
-"....p.p.FFFF",
-"....p.p.FFFF",
-"....G.G.FKFF",
-"....p.p.FFFF",
-"....G.G.fFFF",
-"....p.p..FFF",
-"..yGyGyyMMFF",
-".yyGyGyGMMMM",
-".yGyGyGMMmMM",
-".yyyGMMMGGGG",
-".GyGMMmMGGJG",
-".GGMMmMMMGGG",
-"..GMmMMTTMMM",
-"..GmMMMTTMMp",
-"..GMMmMTtMMp",
-"..GMMMMTtMMp",
-"..GmMMMTTMGp",
-"..GMMMMTtMMp",
-"..gGgGgGgGgG"].map(mir);
-const PAL_M={R:'#e0281c',r:'#a01610',G:'#f2c444',g:'#b8861c',J:'#ff3040',e:'#22a868',p:'#eadcb0',F:'#4a2c1e',f:'#6a4430',K:'#1a0a08',M:'#c4246c',m:'#8c1650',y:'#f8dc5a',T:'#e42038',t:'#a01028'};
+"......GGGGGG",
+".....GGGgYGG",
+"....GGGpGpGp",
+"...GGGGpGpGp",
+"...GgGGpGpGp",
+"....GgGpGpGp",
+".....GGpGpGp",
+".....gGpGpGp",
+"......GGJGGJ",
+".....GgFFFFF",
+".....yBFFFFF",
+".....yBFfFFF",
+".....uBFKKFF",
+"......BFFFFF",
+".....yBFFfFF",
+".....yuFFFFF",
+"...RyyRTTTTT",
+"...RyyRTpTpC",
+"...RRRRTGpPC",
+"...RGRTrGppC",
+"...RRRTGTppp",
+"...RGRTrGppC",
+"...RRRTGTppp",
+"...RGRTrGppT",
+"....RRrTGppT",
+".....rrrTtpT"].map(mir);
+const PAL_M={T:'#e8382c',R:'#c8241a',r:'#8c1410',G:'#f2c444',g:'#b8861c',Y:'#ffe58a',p:'#f4ead2',P:'#c8b894',F:'#3a2418',f:'#5a3a28',K:'#140806',O:'#ff7a18',o:'#d85a10',y:'#ffb818',u:'#d8900c',B:'#2a4aa8',C:'#e8907a',J:'#ff3040',t:'#a01028'};
 function drawGuard(x,y,px,face,flip){
   const P=(c,a,b,w,h)=>R(c,x+(flip?10-a-w:a)*px,y+b*px,w*px,h*px);
   P('#2a1a10',2,0,6,2);P('#e8b830',2,2,6,1);
