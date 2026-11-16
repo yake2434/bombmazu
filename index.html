@@ -27,7 +27,10 @@ const CFG={
   bombPenalty:10,     // 炸彈落地（含被往下撥）扣分
   deflectBonus:10,    // 成功撥開（往上或左右）加分
   charmBonus:5,       // 護身符落地加分
-  stars:[600,1300],   // 結算星等門檻（2 星/3 星），含連擊倍率後分數較高
+  stars:[600,1300,2200,3500],   // 結算星等門檻（2/3/4/5 星）。沒玩過隱藏關卡最高只給 3 星
+  nightDuration:60, nightPhaseAt:30, nightMax:3,          // 隱藏關卡：總秒數、加速時間點、同屏最多夜婆精數
+  nightCatch:20, nightQuick:5, nightTimeoutPen:10, nightIncompletePen:5,   // 圈住加分／快速加成／逃走扣分／圈不完整扣分
+  nightMaxLoop:230,                                       // 圈的最大尺寸(px)，避免一個大圈圈住全部
   downLimit:.35,      // 撥動方向的垂直分量 ≥ 此值視為「往下撥」
   speed1:85, speed2:140,       // 轟炸機速度（第一/第二階段）
   g1:190, g2:290,              // 炸彈重力
@@ -39,6 +42,7 @@ const CFG={
   clusterBonus:15, heavyBonus:20, diveBonus:15,
   heavyPenalty:30, divePenalty:20, splitPenalty:8,   // 各炸彈落地基本扣分
   phase2PenMul:2, bossPenMul:3,                     // 第二階段／Boss 階段扣分倍率
+  testButton:true,                                        // 標題畫面的「測試：隱藏關卡」按鈕（正式上線前改成 false）
   eggChance:.6, eggWindow:[8,48],                      // 隱藏彩蛋：紅豆餅出現機率與出現時間範圍(秒)
   pctPen:.12,                                         // 另外再扣目前分數的 12%（分數越高，漏接越痛）
   chainPen:5, chainMax:3, chainWindow:6,              // 連環爆：6 秒內連續漏接，每次多扣 5（最多 +15）
@@ -53,7 +57,7 @@ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const rnd=Math.round;
 function hs(n){n=n|0;n=Math.imul(n^(n>>>15),2246822519);n=Math.imul(n^(n>>>13),3266489917);return (n^(n>>>16))>>>0}
 
-let scene=null,sceneRuin=null,sceneDay=null;
+let scene=null,sceneRuin=null,sceneDay=null,sceneN=null,sceneN2=null,sceneN3=null;
 function resize(){
   const r=cv.getBoundingClientRect();
   const dpr=Math.min(window.devicePixelRatio||1,3);
@@ -102,6 +106,9 @@ const sfx={
   clang(){tone(1300,.08,'square',.06,-400);tone(280,.12,'sawtooth',.05,-80)},
   dive(){tone(1000,.45,'sawtooth',.05,-800)},
   bossHit(){noise(.25,.22);tone(150,.25,'square',.09,-70)},
+  catch(){[784,988,1318].forEach((f,i)=>setTimeout(()=>tone(f,.16,'triangle',.08),i*60))},
+  miss(){tone(190,.22,'square',.06,-90)},
+  bat(){tone(260,.2,'sawtooth',.04,-150)},
   egg(){[660,880,1100,1320].forEach((f,i)=>setTimeout(()=>tone(f,.14,'triangle',.08),i*90))},
   win(){[523,659,784,1047,1319].forEach((f,i)=>setTimeout(()=>tone(f,.3,'triangle',.12),i*150))},
   lose(){[330,262,196,130].forEach((f,i)=>setTimeout(()=>tone(f,.4,'sawtooth',.09,-20),i*220))}
@@ -160,9 +167,9 @@ function musStep(st,t0,lvl){
 }
 function musTick(){
   if(!ac)return;
-  if(state!=='play'){musStop();return}
+  if(state!=='play'&&state!=='night'){musStop();return}
   if(paused||muted){MUS.next=ac.currentTime+.1;return}
-  const lvl=t>=CFG.bossAt?2:t>=CFG.phaseAt?1:0,bpm=[112,132,150][lvl];
+  const lvl=state==='night'?(t>=CFG.nightPhaseAt?2:1):(t>=CFG.bossAt?2:t>=CFG.phaseAt?1:0),bpm=[112,132,150][lvl];
   while(MUS.next<ac.currentTime+.2){
     musStep(MUS.step,MUS.next,lvl);
     MUS.next+=60/bpm/4;MUS.step++;
@@ -594,6 +601,9 @@ function buildScenes(){
   sceneRuin=makeCanvas();ctx=sceneRuin.getContext('2d');drawWorld();ruinify();
   sceneDay=makeCanvas();ctx=sceneDay.getContext('2d');PAL=MODES.day;HAZE=PAL.haze;drawWorld();
   PAL=MODES.war;HAZE=PAL.haze;
+  sceneN=makeCanvas();ctx=sceneN.getContext('2d');drawNightMap();
+  sceneN2=makeCanvas();ctx=sceneN2.getContext('2d');drawNightMap2();
+  sceneN3=makeCanvas();ctx=sceneN3.getContext('2d');drawNightMap3();
   ctx=prev;
 }
 
@@ -625,6 +635,7 @@ const CAKE=[
 const PAL_K={d:'#8a4a1e',G:'#e8a640',g:'#c47a2a',c:'#f4e2a8'};
 const egg={planned:false,done:false,at:20};
 let cake=null,cakeG=null,eater=null;
+let bonusUnlocked=false,bonusPlayed=false;   // 紅豆餅彩蛋是否觸發／隱藏關卡是否已玩過
 let combo=0,maxCombo=0,annMsg=['',''],tip={t:0,text:''},seenTypes={};
 const boss={on:false,dead:false,dieT:0,x:-140,y:206,dir:1,hp:8,hit:0,nb:1.2};
 const TIPS={cl:'集束炸彈：會在空中分裂，趁早撥開！',hv:'重磅炸彈：要撥兩次！落地扣'+CFG.heavyPenalty,dv:'俯衝炸彈：急速俯衝！落地扣'+CFG.divePenalty};
@@ -640,8 +651,10 @@ function reset(){
   combo=0;maxCombo=0;tip.t=0;seenTypes={};lastHitT=-99;chain=0;
   egg.planned=Math.random()<CFG.eggChance;egg.done=false;egg.at=rand(CFG.eggWindow[0],CFG.eggWindow[1]);cake=null;cakeG=null;eater=null;
   Object.assign(boss,{on:false,dead:false,dieT:0,x:-140,dir:1,hp:CFG.bossHP,hit:0,nb:1.2});
+  bonusUnlocked=false;bonusPlayed=false;loseNight=false;bats=[];rings=[];flashes=[];lp=null;nEnding=false;BTN.y=404;ns.caught=0;ns.timeout=0;ns.incomplete=0;
 }
 function startGame(){reset();state='play';musStart()}
+function startBonusTest(){reset();bonusUnlocked=true;state='play';enterStory()}
 
 function planeSpeed(p){
   let v;
@@ -787,10 +800,8 @@ function slash(x0,y0,x1,y1,dx,dy){
 }
 
 const SHIRTS=['#c8402e','#3a6aa8','#e8c040','#4a8a4a','#f0f0e0','#a04a8a','#d8782a'];
-function finish(win){
-  if(state!=='play')return;
+function winSetup(){
   endT=0;loseT=0;fwT=0;paused=false;
-  if(win){
     state='win';
     for(const b of bombs){if(b.state==='fall'){b.state='def';b.vx=rand(-200,200);b.vy=-rand(150,300);b.spin=rand(-10,10);b.dt=rand(.15,.5)}}
     charms=[];bgBooms=[];decorBombs=[];flash=.6;cake=null;cakeG=null;eater=null;
@@ -802,6 +813,14 @@ function finish(win){
     villagers.sort((a,b)=>a.y-b.y);
     if(score>best){best=score;try{localStorage.setItem('mazuBest',String(best))}catch(e){}}
     sfx.win();
+  BTN.y=bonusPlayed?434:404;
+}
+function finish(win){
+  if(state!=='play')return;
+  endT=0;loseT=0;fwT=0;paused=false;
+  if(win){
+    if(bonusUnlocked&&!bonusPlayed){enterStory();return}
+    winSetup();
   }else{
     state='lose';score=0;cake=null;cakeG=null;eater=null;sfx.lose();
   }
@@ -810,6 +829,9 @@ function finish(win){
 /* ====== 更新 ====== */
 function update(dt){
   clock+=dt;
+  if(state==='lose'&&loseNight)updPanic(dt);
+  if(state==='story'){storyT+=dt;for(const c of nClouds){c.x+=c.s*dt;if(c.x>W+20)c.x=-c.w-20}updFx(dt);return}
+  if(state==='night'){updateNight(dt);return}
   for(const c of dayClouds){c.x+=c.s*dt;if(c.x>420)c.x=-c.w}
   if(state!=='win'){
     bgTimer-=dt;
@@ -978,7 +1000,7 @@ function update(dt){
     const e=eater;
     if(e.st==='run'){
       e.x+=e.dir*125*dt;
-      if(cakeG&&Math.abs(e.x-cakeG.x)<8){e.st='say';e.tm=3.4;cakeG=null;sfx.egg();sparks(e.x,626,['#ffd24a','#fff3b0'],10,120)}
+      if(cakeG&&Math.abs(e.x-cakeG.x)<8){e.st='say';e.tm=3.4;cakeG=null;bonusUnlocked=true;sfx.egg();sparks(e.x,626,['#ffd24a','#fff3b0'],10,120)}
     }else if(e.st==='say'){
       e.tm-=dt;if(e.tm<=0){e.st='leave';e.dir=e.home}
     }else{
@@ -1012,7 +1034,7 @@ function update(dt){
     }
   }else if(state==='lose'){
     endT+=dt;loseT-=dt;
-    if(endT<1.3&&loseT<=0){
+    if(!loseNight&&endT<1.3&&loseT<=0){
       loseT=.16;
       boom(rand(60,340),rand(596,650),true);sfx.boom();shake=.4;
     }
@@ -1276,7 +1298,14 @@ function drawFx(){
 
 /* ====== 繪製：HUD 與畫面 ====== */
 const PB1={x:110,y:318,w:180,h:46},PB2={x:110,y:388,w:180,h:46};
+function drawMuteBtn(){
+  R('rgba(0,0,0,.5)',362,8,30,26);
+  R('#fff',368,17,4,8);R('#fff',372,14,3,14);
+  if(!muted){R('#fff',379,17,2,8);R('#fff',383,14,2,14)}
+  else{ctx.strokeStyle='#ff5a4a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(378,14);ctx.lineTo(388,28);ctx.moveTo(388,14);ctx.lineTo(378,28);ctx.stroke()}
+}
 function drawHud(){
+  if(state==='win'&&bonusPlayed){drawMuteBtn();return}
   const remain=Math.max(0,CFG.duration-t);
   txt('分數 '+score,12,24,22,score<=30?'#ff5a4a':'#fff3c0','left');
   txt('剩 '+Math.ceil(remain)+' 秒',186,24,19,'#fff','center');
@@ -1317,6 +1346,7 @@ function drawHud(){
   }
 }
 const BTN={x:110,y:404,w:180,h:42};
+const TESTBTN={x:105,y:610,w:190,h:34};
 function inRect(p,b){return p.x>=b.x-10&&p.x<=b.x+b.w+10&&p.y>=b.y-10&&p.y<=b.y+b.h+10}
 function button(label,b){
   b=b||BTN;
@@ -1360,6 +1390,11 @@ function drawTitle(){
     txt(L[i][1],96,y,15,'#fff3d0','left','#1a0606',4);
   }
   if(Math.floor(clock*2)%2)txt('— 點擊畫面開始 —',200,552,22,'#fff','center','#7a1010',6);
+  if(CFG.testButton){
+    R('#1a0a28',TESTBTN.x-2,TESTBTN.y-2,TESTBTN.w+4,TESTBTN.h+4);R('#7a48a8',TESTBTN.x,TESTBTN.y,TESTBTN.w,TESTBTN.h);
+    R('#4a2868',TESTBTN.x,TESTBTN.y+TESTBTN.h-4,TESTBTN.w,4);
+    txt('［測試］進入隱藏關卡',TESTBTN.x+TESTBTN.w/2,TESTBTN.y+TESTBTN.h/2-1,15,'#fff','center',null);
+  }
   if(best>0)txt('最高紀錄　'+best,200,598,16,'#ffd24a','center','#1a0606',4);
   txt('本遊戲為橙色的品源發心創作',200,676,12,'#d8b890','center','#1a0606',3);
 }
@@ -1372,16 +1407,25 @@ function drawWin(){
     for(let i=0;i<12;i++){ctx.rotate(Math.PI/6);ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-14,-200);ctx.lineTo(14,-200);ctx.fill()}
     ctx.restore();
     ctx.globalAlpha=clamp((e-.2)*1.2,0,1);
-    spr(MAZU,PAL_M,164,174+Math.sin(clock*2)*3,3);
-    drawGuard(98,198+Math.sin(clock*2+1)*2,3,'#c8402e',false);
-    drawGuard(272,198+Math.sin(clock*2+2)*2,3,'#2e4a6a',true);
+    if(bonusPlayed){
+      // 媽祖腳踩夜婆精
+      const bob=Math.sin(clock*2)*2;
+      ctx.save();ctx.translate(200,242);ctx.scale(1,.62);spr(BAT,PAL_BAT2,-BAT_W*1.5/2,-BAT_H*1.5/2,3);ctx.restore();
+      spr(MAZU,PAL_M,152,116+bob,4);
+      R('#c8241a',170,218+bob,20,8);R('#f2c444',170,225+bob,20,2);R('#c8241a',210,218+bob,20,8);R('#f2c444',210,225+bob,20,2);
+      for(let i=0;i<4;i++){const a=clock*3+i*1.57;txt('★',200+Math.cos(a)*62,244+Math.sin(a)*14,14,'#ffe060','center','#4a1a7a',3)}
+    }else{
+      spr(MAZU,PAL_M,164,174+Math.sin(clock*2)*3,3);
+      drawGuard(98,198+Math.sin(clock*2+1)*2,3,'#c8402e',false);
+      drawGuard(272,198+Math.sin(clock*2+2)*2,3,'#2e4a6a',true);
+    }
     ctx.globalAlpha=1;
   }
   const s=e<.3?clamp(e/.3,0,1.3):1+Math.sin(clock*4)*.04;
-  ctx.save();ctx.translate(200,100);ctx.scale(s,s);
-  txt('過關！',0,0,56,'#ffd24a','center','#7a1010',11);
+  ctx.save();ctx.translate(200,bonusPlayed?62:100);ctx.scale(s,s);
+  txt(bonusPlayed?'收服夜婆精！':'過關！',0,0,bonusPlayed?48:56,'#ffd24a','center','#7a1010',11);
   ctx.restore();
-  if(e>1)txt('媽祖護境　村莊平安',200,146,18,'#fff3d0','center','#1a0606',5);
+  if(e>1)txt(bonusPlayed?'萬丹媽第三次出馬　徹底收服':'媽祖護境　村莊平安',200,bonusPlayed?100:146,18,'#fff3d0','center','#1a0606',5);
 }
 /* 結算畫面連結（畫在 canvas 上，點擊會另開分頁） */
 const LINKS=[
@@ -1408,19 +1452,29 @@ function linkAt(p){
   for(const L of LINKS)if(p.y>=L.y-10&&p.y<=L.y+9&&p.x>=14&&p.x<=386)return L;
   return null;
 }
+function calcStars(){
+  let n=1;CFG.stars.forEach((v,i)=>{if(score>=v)n=i+2});
+  if(!bonusPlayed)n=Math.min(n,3);
+  return n;
+}
 function drawWinPanel(){
   const e=endT;
   if(e<=2)return;
-  panel(50,262,300,192);
-  const stars=score>=CFG.stars[1]?3:score>=CFG.stars[0]?2:1;
-  const names=['驚險過關','平安護境','神蹟顯靈'];
-  let st='';for(let i=0;i<3;i++)st+=i<stars?'★':'☆';
-  txt(st,200,284,28,'#ffd24a','center','#1a0606',5);
-  txt(names[stars-1]+(boss.dead?'　★ 擊落 Boss':''),200,306,14,'#fff3d0','center','#1a0606',4);
-  txt('最終分數　'+score,200,334,26,'#fff','center','#7a1010',6);
-  txt('彈開 '+stats.deflected+' 顆　護身符 '+stats.charms+' 張　最高連擊 '+maxCombo,200,360,14,'#ffe9b0','center','#1a0606',4);
-  txt('最高紀錄　'+best+(score>=best?'（新紀錄！）':''),200,382,14,'#ffd24a','center','#1a0606',4);
+  const oy=bonusPlayed?30:0;
+  panel(50,262+oy,300,192);
+  const stars=calcStars();
+  const names=['驚險過關','平安護境','神蹟顯靈','護境傳奇','神威無雙'];
+  let st='';for(let i=0;i<5;i++)st+=i<stars?'★':'☆';
+  txt(st,200,284+oy,26,'#ffd24a','center','#1a0606',5);
+  txt(names[stars-1]+(boss.dead?'　★ 擊落 Boss':''),200,306+oy,14,'#fff3d0','center','#1a0606',4);
+  txt('最終分數　'+score,200,334+oy,26,'#fff','center','#7a1010',6);
+  txt(bonusPlayed?'彈開 '+stats.deflected+' 顆　夜婆精 '+ns.caught+' 隻　連擊 '+maxCombo:'彈開 '+stats.deflected+' 顆　護身符 '+stats.charms+' 張　最高連擊 '+maxCombo,200,360+oy,14,'#ffe9b0','center','#1a0606',4);
+  txt('最高紀錄　'+best+(score>=best?'（新紀錄！）':''),200,382+oy,14,'#ffd24a','center','#1a0606',4);
   button('再玩一次');
+  if(bonusPlayed){
+    txt('萬丹、竹田三十六庄大境主，',200,516,18,'#fff3d0','center','#1a0606',5);
+    txt('萬丹萬惠宮萬丹媽!',200,544,20,'#ffd24a','center','#1a0606',5);
+  }
   drawLinks();
 }
 function drawLose(){
@@ -1448,6 +1502,8 @@ function draw(){
   ctx.setTransform(k,0,0,k,0,0);
   ctx.imageSmoothingEnabled=false;
   ctx.clearRect(0,0,W,H);
+  if(state==='story'||state==='night'){drawBonus();if(paused)drawPause();return}
+  if(state==='lose'&&loseNight){drawNightLose();drawMuteBtn();return}
   ctx.save();
   if(shake>0)ctx.translate(rand(-1,1)*shake*10,rand(-1,1)*shake*10);
   const win=state==='win',wk=win?clamp(endT/1.6,0,1):0;
@@ -1486,12 +1542,681 @@ function draw(){
   else if(paused)drawPause();
 }
 
+/* ====== 隱藏關卡：媽祖收服夜婆精（俯視、畫圈玩法） ====== */
+const BAT=[
+"..............KK..K........K..KK..............",
+"............KKCNKKPK......KPKKNCKK............",
+"...........KCCCNKKPPK....KPPKKNCCCK...........",
+".........KKCCNCNKKPNPKKKKPNPKKNCNCCKK.........",
+"........KCCCNNCNPKPNPPPPPPNPKPNCNNCCCK........",
+"......KKCCNNPNCNPKKPPPPPPPPKKPNCNPNNCCKK......",
+".....KCCCNPPPNCNNKKPNPPPPNPKKNNCNPPPNCCCK.....",
+"....KCCNNPPPPNCNNKKPEEPPEEPKKNNCNPPPPNNCCK....",
+"..KKCCNPPPPPPNCNNKKPEEPPEEPKKNNCNPPPPPPNCCKK..",
+".KCCNNPPPPPPPCCNNKKPPKPPKPPKKNNCCPPPPPPPNNCCK.",
+".KCNPPPPPPPPPCCNNKKKCKKKKCKKKNNCCPPPPPPPPPNCK.",
+"..KKKPPPPPPPNCNNNKKKKRRRRKKKKNNNCNPPPPPPPKKK..",
+".....KKKPPPPNCNNNKKNKKPPKKNKKNNNCNPPPPKKK.....",
+"........KKPPNCNNNKKNPPPPPPNKKNNNCNPPKK........",
+"..........KPNCKKKKCNPPPPPPNCKKKKCNPK..........",
+"...........KNCK..KCKPPPPPPKCK..KCNK...........",
+"............KCK.KCKKNPPPPNKKCK.KCK............",
+".............K..KCPKKPPPPKKPCK..K.............",
+"................KCK..KPPK..KCK................",
+".................K....KK....K................."];
+const PAL_BAT={P:'#532a62',N:'#10204a',C:'#f0d890',E:'#d82020',K:'#0a0a10',R:'#d02828'};
+const PAL_BAT2={P:'#532a62',N:'#10204a',C:'#f0d890',E:'#ffe060',K:'#0a0a10',R:'#d02828'};
+const BAT_PX=2,BAT_W=BAT[0].length*BAT_PX,BAT_H=BAT.length*BAT_PX;
+let bats=[],rings=[],flashes=[],lp=null,nSpawn=.4,nPhase2=false,nEnding=false,nEndT=0;
+let storyPage=0,storyT=0;
+const storyDone=()=>storyT*STORY_CPS>=STORY_TEXT.length;
+const ns={caught:0,timeout:0,incomplete:0};
+const STORY_BTN={x:110,y:588,w:180,h:44};
+const nClouds=[];
+const STORY_TEXT='相傳很久以前在後庄有夜婆精作亂，地方苦不堪言，萬丹媽出手後，夜婆精趁亂逃跑到現在的新庄仔，無奈夜婆精率領了太多山精野怪，新興宮上帝公也制服不了，只好請出萬丹媽再次趕跑夜婆精，這次夜婆精跑到了竹田頓物庄一帶作怪，只好第三次請出萬丹媽，這次總算徹底收服了夜婆精。從此竹田一帶的人也對萬丹媽敬佩萬分，一起加入了萬丹媽的三十六庄頭香境中。';
+const STORY_CPS=26;                       // 故事逐字顯示速度（字／秒），點一下可跳過
+let storyLinesCache=null;
+const BG_NAMES=[['竹田田園','夜婆精四處作亂'],['月夜廟埕','萬丹媽金光護境'],['黃昏竹田','三度出馬　徹底收服']];
+let nSlot=0;
+function storyLines(){
+  if(storyLinesCache)return storyLinesCache;
+  ctx.font='bold 16px "PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif';
+  const out=[];let cur='';
+  for(const ch of STORY_TEXT){
+    if(ctx.measureText(cur+ch).width>314&&!'，。、！？'.includes(ch)){out.push(cur);cur=ch}else cur+=ch;
+  }
+  if(cur)out.push(cur);
+  return storyLinesCache=out;
+}
+function makeCloud(w,h,seed,color,shade){
+  const c=document.createElement('canvas'),pw=Math.round(w/4),ph=Math.round(h/4);
+  c.width=pw;c.height=ph;const g=c.getContext('2d');
+  let s=seed;const rr=()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296};
+  const blob=(cx,cy,rx,ry,col)=>{g.fillStyle=col;for(let dy=-ry;dy<=ry;dy++){const ww=Math.round(rx*Math.sqrt(1-dy*dy/(ry*ry)));g.fillRect(Math.round(cx-ww),Math.round(cy+dy),ww*2,1)}};
+  for(let i=0;i<7;i++){
+    const cx=pw*(.18+.64*rr()),cy=ph*(.4+.2*rr()),rx=pw*(.16+.1*rr()),ry=ph*(.26+.14*rr());
+    blob(cx,cy+2,rx,ry,shade);
+  }
+  s=seed;
+  for(let i=0;i<7;i++){
+    const cx=pw*(.18+.64*rr()),cy=ph*(.4+.2*rr()),rx=pw*(.16+.1*rr()),ry=ph*(.26+.14*rr());
+    blob(cx,cy-1,rx,ry,color);
+  }
+  return c;
+}
+function initNightAssets(){
+  if(nClouds.length)return;
+  for(let i=0;i<6;i++){
+    const w=rnd(rand(150,240)),h=rnd(w*rand(.42,.6));
+    nClouds.push({x:rand(-100,400),y:rand(20,640),w,h,s:rand(7,18),img:makeCloud(w,h,i*977+13,'#ffffff','#d8e0f2'),sh:makeCloud(w,h,i*977+13,'#000000','#000000')});
+  }
+}
+/* --- 俯視場景（預先畫好一張，縮放時重建） --- */
+function drawNightMap(){
+  let seed=11;const rr=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+  const disc=(cx,cy,r,c)=>{for(let dy=-r;dy<=r;dy++){const w=Math.round(Math.sqrt(r*r-dy*dy));R(c,cx-w,cy+dy,2*w,1)}};
+  R('#5a9440',0,0,W,H);
+  const gc=['#4f8838','#68a44a','#4a7d34','#74ad54'];
+  for(let i=0;i<2200;i++){const s=2+((rr()*3)|0);R(gc[(rr()*4)|0],rr()*W,rr()*H,s,s)}
+  // 田園
+  const PF={young:['#74b84e','#5c9c3c'],gold:['#d6bb4a','#b89a30'],water:['#7fb4d0','#a8d0e4'],veg:['#8a6a3a','#5aa040']};
+  const types=['young','gold','water','veg','young','gold'];
+  for(let gy=0;gy<10;gy++)for(let gx=0;gx<4;gx++){
+    if(rr()<.16)continue;
+    const x=gx*100+rr()*6,y=gy*70+rr()*6,w=94-rr()*6,h=64-rr()*4,ty=types[(rr()*types.length)|0],P=PF[ty];
+    R('#a89058',x-2,y-2,w+4,h+4);R(P[0],x,y,w,h);
+    for(let yy=y+3;yy<y+h;yy+=6)R(P[1],x,yy,w,2);
+    if(ty==='water'){for(let i=0;i<14;i++)R('#4a8a3c',x+rr()*w,y+rr()*h,2,2);R('#e8f4ff',x+8,y+4,18,2)}
+    if(ty==='gold')for(let i=0;i<30;i++)R('#f0d870',x+rr()*w,y+rr()*h,2,2);
+  }
+  // 小路
+  const road=(pts,w)=>{
+    for(const pass of [0,1])for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1],L=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      for(let s=0;s<=L;s+=2){
+        const x=a[0]+(b[0]-a[0])*s/L,y=a[1]+(b[1]-a[1])*s/L,ww=pass?w:w+4;
+        R(pass?'#cdb680':'#a8925c',x-ww/2,y-ww/2,ww,ww);
+      }
+    }
+  };
+  road([[-10,352],[110,340],[240,356],[410,338]],16);
+  road([[150,348],[160,450],[140,560],[158,712]],12);
+  road([[250,352],[240,250],[262,140],[250,-10]],12);
+  // 三合院（俯視：正身 + 兩側護龍 + 中間埕）
+  const lamps=[];
+  const sanheTop=(cx,cy,sc,rot)=>{
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(rot*Math.PI/2);ctx.scale(sc,sc);
+    const L=(c,x,y,w,h)=>{ctx.fillStyle=c;ctx.fillRect(x-65,y-50,w,h)};
+    L('rgba(0,0,0,.28)',8,8,130,100);
+    L('#cdbb8e',0,0,130,100);L('#b8a676',0,0,130,3);
+    const roofH=(x,y,w,h)=>{L('#8a3a2a',x,y,w,h);for(let i=0;i<w;i+=4)L('#9c4a36',x+i,y,2,h);L('#5a1e14',x,y+h/2-1.5,w,3);L('#c2704a',x,y,w,2);L('#4a1810',x,y+h-2,w,2)};
+    const roofV=(x,y,w,h)=>{L('#8a3a2a',x,y,w,h);for(let i=0;i<h;i+=4)L('#9c4a36',x,y+i,w,2);L('#5a1e14',x+w/2-1.5,y,3,h);L('#c2704a',x,y,2,h);L('#4a1810',x+w-2,y,2,h)};
+    roofH(0,0,130,34);roofV(0,34,28,66);roofV(102,34,28,66);
+    L('#8a6a4a',28,96,30,4);L('#8a6a4a',72,96,30,4);
+    L('#e4c458',40,46,46,28);L('#c8a838',40,46,46,2);L('#c8a838',40,72,46,2);
+    L('#8a8a90',90,44,8,8);L('#5a5a60',92,46,4,4);
+    ctx.restore();
+    const c=Math.cos(rot*Math.PI/2),s=Math.sin(rot*Math.PI/2);
+    for(const [lx,ly] of [[0,-32],[-36,40],[36,40]]){lamps.push({x:cx+(lx*c-ly*s)*sc,y:cy+(lx*s+ly*c)*sc})}
+  };
+  sanheTop(95,200,1,0);sanheTop(315,150,.75,1);sanheTop(310,470,1,2);sanheTop(85,610,.75,3);sanheTop(62,430,.6,0);
+  // 竹林
+  const bamboo=(cx,cy,n,sp)=>{
+    for(let i=0;i<n;i++){
+      const a=rr()*6.283,r=Math.sqrt(rr())*sp,bx=cx+Math.cos(a)*r,by=cy+Math.sin(a)*r;
+      R('rgba(0,0,0,.25)',bx-9+5,by-7+5,18,14);
+      R('#25602a',bx-9,by-7,18,14);R('#25602a',bx-7,by-9,14,18);
+      R('#3f8a38',bx-6,by-6,11,10);R('#5aa848',bx-5,by-5,6,4);
+      R('#8ed064',bx-4,by-5,3,2);R('#b0e880',bx+1,by-3,2,2);
+    }
+  };
+  bamboo(352,296,16,40);bamboo(36,300,14,34);bamboo(300,585,15,38);bamboo(205,95,13,34);bamboo(30,540,10,26);bamboo(372,400,9,24);
+  // 樹與池塘
+  const tree=(cx,cy,r)=>{disc(cx+5,cy+6,r,'rgba(0,0,0,.25)');disc(cx,cy,r,'#2d6a2c');disc(cx-2,cy-2,Math.round(r*.7),'#3f8a38');disc(cx-4,cy-4,Math.round(r*.35),'#78bb52')};
+  for(const [x,y,r] of [[190,250,13],[370,230,11],[215,420,14],[28,100,12],[360,640,13],[130,500,10],[260,650,12],[180,300,9]])tree(x,y,r);
+  for(let dy=-20;dy<=20;dy++){const w=Math.round(36*Math.sqrt(1-dy*dy/441));R('#8a7a4a',222-w-2,540+dy,2*w+4,1)}
+  for(let dy=-18;dy<=18;dy++){const w=Math.round(33*Math.sqrt(1-dy*dy/361));R('#5a9ab8',222-w,540+dy,2*w,1)}
+  R('#9ac8dc',205,530,14,2);R('#9ac8dc',230,545,10,2);
+  // 黃昏色調與燈光
+  R('rgba(34,26,92,.34)',0,0,W,H);
+  for(const l of lamps){
+    const g=ctx.createRadialGradient(l.x,l.y,2,l.x,l.y,34);
+    g.addColorStop(0,'rgba(255,205,100,.6)');g.addColorStop(1,'rgba(255,205,100,0)');
+    ctx.fillStyle=g;ctx.fillRect(l.x-34,l.y-34,68,68);
+    R('#ffe9a0',l.x-1.5,l.y-1.5,3,3);
+  }
+  const v=ctx.createRadialGradient(200,350,130,200,350,470);
+  v.addColorStop(0,'rgba(10,6,30,0)');v.addColorStop(1,'rgba(10,6,30,.5)');
+  ctx.fillStyle=v;ctx.fillRect(0,0,W,H);
+}
+/* --- 第二款背景：月夜廟埕（金光護境） --- */
+function drawNightMap2(){
+  let seed=29;const rr=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+  const disc=(cx,cy,r,c)=>{for(let dy=-r;dy<=r;dy++){const w=Math.round(Math.sqrt(r*r-dy*dy));R(c,cx-w,cy+dy,2*w,1)}};
+  R('#2f5a3e',0,0,W,H);
+  const gc=['#2a5238','#366648','#244a32','#3c704c'];
+  for(let i=0;i<2000;i++){const s=2+((rr()*3)|0);R(gc[(rr()*4)|0],rr()*W,rr()*H,s,s)}
+  // 竹林（環繞廟埕）
+  const bamboo=(bx,by)=>{
+    R('rgba(0,0,0,.28)',bx-9+5,by-7+5,18,14);
+    R('#1f5226',bx-9,by-7,18,14);R('#1f5226',bx-7,by-9,14,18);
+    R('#37803a',bx-6,by-6,11,10);R('#4f9c48',bx-5,by-5,6,4);
+    R('#7cc060',bx-4,by-5,3,2);R('#a0dc7c',bx+1,by-3,2,2);
+  };
+  const cx=200,cy=390;
+  for(let i=0;i<420;i++){
+    const x=rr()*W,y=rr()*H;
+    const dx=Math.abs(x-cx),dy=Math.abs(y-cy);
+    if(dx<132&&dy<150)continue;                       // 廟埕空地
+    if(Math.abs(x-cx)<26&&y>cy)continue;              // 往南的小徑
+    bamboo(x,y);
+  }
+  // 小徑
+  for(let y=cy+140;y<H+10;y+=2){const x=cx+Math.sin(y*.03)*6;R('#a8925c',x-16,y,32,2);R('#cdb680',x-12,y,24,2)}
+  // 廟埕石板
+  R('#5a5a64',cx-128,cy-146,256,292);
+  R('#8e8e98',cx-124,cy-142,248,284);
+  for(let x=cx-124;x<cx+124;x+=24)R('#6e6e78',x,cy-142,2,284);
+  for(let y=cy-142;y<cy+142;y+=24)R('#6e6e78',cx-124,y,248,2);
+  for(let i=0;i<120;i++)R('#a8a8b2',cx-124+rr()*248,cy-142+rr()*284,2,2);
+  // 小廟（俯視：正殿＋兩側護龍）
+  const L=(c,x,y,w,h)=>R(c,x,y,w,h);
+  const roofH=(x,y,w,h)=>{L('#a02820',x,y,w,h);for(let i=0;i<w;i+=4)L('#b8382c',x+i,y,2,h);L('#e8b838',x,y+h/2-2,w,4);L('#fff0a0',x,y+h/2-2,w,1);L('#5a1410',x,y+h-2,w,2);L('#d86a4a',x,y,w,2)};
+  const roofV=(x,y,w,h)=>{L('#a02820',x,y,w,h);for(let i=0;i<h;i+=4)L('#b8382c',x,y+i,w,2);L('#e8b838',x+w/2-2,y,4,h);L('#5a1410',x+w-2,y,2,h);L('#d86a4a',x,y,2,h)};
+  L('rgba(0,0,0,.3)',cx-84,cy-134,176,70);
+  roofH(cx-90,cy-142,180,44);roofV(cx-90,cy-98,34,56);roofV(cx+56,cy-98,34,56);
+  L('#e8b838',cx-96,cy-142,6,6);L('#e8b838',cx+90,cy-142,6,6);       // 脊飾
+  L('#c8a838',cx-14,cy-98,28,6);                                    // 門前
+  // 令旗與燈籠
+  const flagCols=['#d82a20','#f0c020','#2a6ad8','#2aa84a','#f4f4f4','#a03ab0'];
+  let fi=0;
+  const flag=(x,y)=>{
+    const c=flagCols[fi++%6];
+    R('rgba(0,0,0,.3)',x+3,y+3,10,10);R('#6a4a2a',x,y,2,12);R(c,x+2,y,10,7);R('rgba(255,255,255,.35)',x+2,y,10,2);
+  };
+  for(let x=cx-120;x<=cx+112;x+=24){flag(x,cy-136+60);flag(x,cy+130)}
+  for(let y=cy-70;y<=cy+120;y+=24){flag(cx-124,y);flag(cx+116,y)}
+  const lamps=[];
+  for(const yy of [cy-20,cy+60]){
+    for(let x=cx-120;x<=cx+120;x+=20){
+      const sag=Math.sin((x-(cx-120))/240*Math.PI)*8;
+      R('#3a2a1a',x,yy+sag,20,1);
+      lamps.push({x:x+10,y:yy+sag+2});
+    }
+  }
+  // 暗色夜景
+  R('rgba(8,18,60,.46)',0,0,W,H);
+  // 媽祖金光法陣
+  const g=ctx.createRadialGradient(cx,cy,10,cx,cy,230);
+  g.addColorStop(0,'rgba(255,214,110,.55)');g.addColorStop(.55,'rgba(255,200,90,.18)');g.addColorStop(1,'rgba(255,200,90,0)');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,228,140,.55)';ctx.lineWidth=2;
+  for(const r of [62,96,128]){ctx.beginPath();ctx.arc(cx,cy+20,r,0,6.283);ctx.stroke()}
+  for(let i=0;i<12;i++){const a=i/12*6.283;ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*62,cy+20+Math.sin(a)*62);ctx.lineTo(cx+Math.cos(a)*128,cy+20+Math.sin(a)*128);ctx.stroke()}
+  ctx.fillStyle='rgba(255,236,170,.35)';ctx.beginPath();ctx.arc(cx,cy+20,24,0,6.283);ctx.fill();
+  for(const l of lamps){
+    const gg=ctx.createRadialGradient(l.x,l.y,1,l.x,l.y,14);
+    gg.addColorStop(0,'rgba(255,120,60,.8)');gg.addColorStop(1,'rgba(255,120,60,0)');
+    ctx.fillStyle=gg;ctx.fillRect(l.x-14,l.y-14,28,28);
+    R('#e8301c',l.x-2,l.y-2,4,5);R('#ffd060',l.x-1,l.y-1,2,2);
+  }
+  const v=ctx.createRadialGradient(200,350,130,200,350,470);
+  v.addColorStop(0,'rgba(4,8,28,0)');v.addColorStop(1,'rgba(4,8,28,.55)');
+  ctx.fillStyle=v;ctx.fillRect(0,0,W,H);
+}
+
+/* --- 第三款背景：黃昏竹田（夕陽竹林、小溪、光束，收服成功的暖光） --- */
+function drawNightMap3(){
+  let seed=53;const rr=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296};
+  R('#6c8c3e',0,0,W,H);
+  const gc=['#62823a','#7a9c48','#5a7836','#86a850'];
+  for(let i=0;i<2000;i++){const s=2+((rr()*3)|0);R(gc[(rr()*4)|0],rr()*W,rr()*H,s,s)}
+  const stream=[[-20,140],[90,205],[150,330],[120,460],[210,570],[300,650],[430,705]];
+  const path=[[-20,330],[90,325],[150,330],[260,345],[420,330]];
+  const dpl=(x,y,pts)=>{let m=1e9;for(let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1],dx=b[0]-a[0],dy=b[1]-a[1],L=dx*dx+dy*dy;
+    const t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/L));
+    m=Math.min(m,Math.hypot(x-(a[0]+t*dx),y-(a[1]+t*dy)))}return m};
+  const stamp=(pts,w,col,step)=>{
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1],L=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      for(let s=0;s<=L;s+=step||2){const x=a[0]+(b[0]-a[0])*s/L,y=a[1]+(b[1]-a[1])*s/L;R(col,x-w/2,y-w/2,w,w)}
+    }
+  };
+  // 空地：小田與菜園
+  const fields=[[262,70,110,90,'#d6bb4a','#b89a30'],[20,620,100,70,'#74b84e','#5c9c3c'],[270,520,100,80,'#8a6a3a','#5aa040']];
+  for(const [x,y,w,h,c1,c2] of fields){
+    R('#a89058',x-2,y-2,w+4,h+4);R(c1,x,y,w,h);for(let yy=y+3;yy<y+h;yy+=6)R(c2,x,yy,w,2);
+  }
+  stamp(path,14,'#a8925c');stamp(path,10,'#cdb680');
+  stamp(stream,44,'#8a7a4a');stamp(stream,36,'#6aa8c0');
+  for(let i=0;i<60;i++){const q=stream[(rr()*(stream.length-1))|0];R('#a8d4e4',q[0]+rr()*60-30,q[1]+rr()*60-30,6,2)}
+  // 木橋
+  for(let i=0;i<9;i++){R('#7a5a34',128+i*5,306,4,50);R('#5a3e22',128+i*5,306,1,50)}
+  R('#4a3018',126,304,48,3);R('#4a3018',126,355,48,3);
+  // 竹林
+  const bamboo=(bx,by)=>{
+    R('rgba(30,10,0,.3)',bx-9+10,by-7+9,18,14);
+    R('#22602a',bx-9,by-7,18,14);R('#22602a',bx-7,by-9,14,18);
+    R('#3c8c3a',bx-6,by-6,11,10);R('#58aa48',bx-5,by-5,6,4);
+    R('#9ad064',bx-4,by-5,3,2);R('#d0f090',bx+1,by-3,2,2);
+  };
+  for(let i=0;i<560;i++){
+    const x=rr()*W,y=rr()*H;
+    if(dpl(x,y,stream)<36||dpl(x,y,path)<20)continue;
+    if(x>250&&x<385&&y>60&&y<170)continue;
+    if(x>12&&x<132&&y>612&&y<700)continue;
+    if(x>262&&x<382&&y>512&&y<612)continue;
+    bamboo(x,y);
+  }
+  // 暖色夕陽與光束
+  R('rgba(255,130,50,.26)',0,0,W,H);
+  for(let i=0;i<5;i++){
+    const x0=60+i*90;
+    ctx.fillStyle='rgba(255,226,150,'+(.09+(i%2)*.04)+')';
+    ctx.beginPath();ctx.moveTo(x0,-10);ctx.lineTo(x0+46,-10);ctx.lineTo(x0-170,H+10);ctx.lineTo(x0-250,H+10);ctx.closePath();ctx.fill();
+  }
+  const sun=ctx.createRadialGradient(W,0,10,W,0,330);
+  sun.addColorStop(0,'rgba(255,230,150,.7)');sun.addColorStop(1,'rgba(255,200,100,0)');
+  ctx.fillStyle=sun;ctx.fillRect(0,0,W,H);
+  for(let i=0;i<46;i++){
+    const x=rr()*W,y=rr()*H,g=ctx.createRadialGradient(x,y,0,x,y,7);
+    g.addColorStop(0,'rgba(255,240,150,.9)');g.addColorStop(1,'rgba(255,240,150,0)');
+    ctx.fillStyle=g;ctx.fillRect(x-7,y-7,14,14);R('#fff6c0',x-1,y-1,2,2);
+  }
+  const v=ctx.createRadialGradient(200,350,140,200,350,470);
+  v.addColorStop(0,'rgba(60,16,10,0)');v.addColorStop(1,'rgba(60,16,10,.5)');
+  ctx.fillStyle=v;ctx.fillRect(0,0,W,H);
+}
+/* --- 收服失敗：夜婆精大笑、村民逃散 --- */
+let loseNight=false,panic=[];
+const PANIC_SAY=['救命啊！','快逃！','夜婆精來了！','媽祖救我！','啊——！'];
+function drawPerson(x,yf,q,shirt,hat,moving,up,ph){
+  const y=rnd(yf-(moving?Math.abs(Math.sin(clock*14+ph))*3:0)),xx=rnd(x),skin='#e8b888';
+  R('rgba(0,0,0,.25)',xx-3*q,yf-1,6*q,2);
+  const l=moving&&Math.sin(clock*14+ph)>0?q:0;
+  R('#2a2a3a',xx-2*q,y-4*q,q+1,4*q-l);R('#2a2a3a',xx+q-1,y-4*q,q+1,4*q-(q-l));
+  R(shirt,xx-2*q,y-9*q,4*q,5*q);
+  const u=up?3*q:0;
+  R(skin,xx-3*q,y-14*q-u+(up?0:q*2),q,5*q+u-(up?0:q*2));R(skin,xx+2*q,y-14*q-u+(up?0:q*2),q,5*q+u-(up?0:q*2));
+  R(skin,xx-1.5*q,y-12*q,3*q,3*q);
+  if(up)R('#2a0a0a',xx-q,y-11*q,2*q,q);else R('#7a2a20',xx-q/2,y-10*q,q,Math.max(1,q/2));
+  if(hat){R('#d8b860',xx-3*q,y-13*q,6*q,q);R('#d8b860',xx-2*q,y-14*q,4*q,q);R('#d8b860',xx-q,y-15*q,2*q,q)}
+  else R('#1a0e0a',xx-1.5*q,y-13*q,3*q,q);
+}
+function initPanic(){
+  panic=[];
+  const shirts=SHIRTS||['#c8402e','#2e6aa8','#3a8a4a','#d8a030','#8a4aa8'];
+  for(let i=0;i<10;i++)panic.push({x:rand(30,370),y:rand(500,626),vx:(Math.random()<.5?-1:1)*rand(80,170),ph:rand(0,6),shirt:shirts[i%shirts.length],hat:Math.random()<.5,say:'',sayT:rand(0,1.5),turn:rand(.6,1.6)});
+}
+function updPanic(dt){
+  for(const v of panic){
+    v.x+=v.vx*dt;v.turn-=dt;
+    if(v.x<16){v.x=16;v.vx=Math.abs(v.vx)}
+    if(v.x>384){v.x=384;v.vx=-Math.abs(v.vx)}
+    if(v.turn<=0){v.turn=rand(.6,1.6);if(Math.random()<.6)v.vx=-v.vx;v.y=clamp(v.y+rand(-30,30),500,628)}
+    v.sayT-=dt;if(v.sayT<=0){v.sayT=rand(1.2,2.2);v.say=Math.random()<.7?pick(PANIC_SAY):''}
+  }
+}
+function drawNightLose(){
+  const e=endT;
+  const sc=[sceneN,sceneN2,sceneN3][clamp(nSlot,0,2)];
+  if(sc)ctx.drawImage(sc,0,0,W,H);
+  ctx.fillStyle='rgba(70,0,20,'+Math.min(.55,.25+e*.2)+')';ctx.fillRect(0,0,W,H);
+  if(Math.floor(clock*4)%2)R('rgba(255,40,30,.08)',0,0,W,H);
+  ctx.save();
+  if(e<1.2)ctx.translate(rand(-1,1)*(1.2-e)*6,rand(-1,1)*(1.2-e)*6);
+  // 大笑的夜婆精
+  const lg=Math.abs(Math.sin(clock*13)),bob=Math.sin(clock*13)*5;
+  ctx.save();ctx.translate(200,196+bob);ctx.rotate(Math.sin(clock*13)*.05);ctx.scale(3,3);
+  ctx.fillStyle='rgba(255,40,30,.28)';ctx.beginPath();ctx.arc(-7,-6,9,0,6.283);ctx.arc(7,-6,9,0,6.283);ctx.fill();
+  spr(BAT,PAL_BAT,-BAT_W/2,-BAT_H/2,BAT_PX);
+  const mh=6+lg*8;
+  ctx.fillStyle='#0a0408';ctx.beginPath();ctx.ellipse(0,4,9,mh/2+1,0,0,6.283);ctx.fill();
+  ctx.fillStyle='#d02828';ctx.beginPath();ctx.ellipse(0,4+mh/3,5,mh/4,0,0,6.283);ctx.fill();
+  ctx.fillStyle='#f4f4e8';ctx.fillRect(-8,4-mh/2,2.4,3.5);ctx.fillRect(5.6,4-mh/2,2.4,3.5);
+  ctx.restore();
+  ctx.restore();
+  txt('哈哈哈哈哈！',rnd(200+Math.sin(clock*20)*3),rnd(118+Math.cos(clock*17)*3),28,'#ffe0e8','center','#5a0a2a',8);
+  txt('哈！',92,rnd(250-(clock*30)%40),20,'#ff9aa8','center','#3a0a1a',5);
+  txt('哈！',312,rnd(238-((clock*30+20)%40)),20,'#ff9aa8','center','#3a0a1a',5);
+  if(e>.4){
+    txt('收服失敗！',200,52,44,'#ff6a5a','center','#2a0505',10);
+    txt('夜婆精大笑　村民四處逃散',200,86,16,'#ffd9a0','center','#1a0606',5);
+  }
+  // 驚慌逃散的村民
+  const order=panic.slice().sort((a,b)=>a.y-b.y);
+  for(const v of order){
+    drawPerson(v.x,v.y,3,v.shirt,v.hat,true,true,v.ph);
+    if(v.say){
+      const w=v.say.length*13+14,bx=clamp(v.x,w/2+4,W-w/2-4),by=v.y-58;
+      R('#1a0606',bx-w/2-2,by-12,w+4,24);R('#fffbe8',bx-w/2,by-10,w,20);
+      txt(v.say,bx,by,13,'#a02a14','center',null);
+    }
+  }
+  if(e>1.2){
+    panel(50,300,300,160);
+    txt('最終分數　0',200,334,26,'#fff','center','#7a1010',6);
+    txt('圈住夜婆精 '+ns.caught+' 隻　彈開炸彈 '+stats.deflected+' 顆',200,362,14,'#ffe9b0','center','#1a0606',4);
+    txt('最高紀錄　'+best,200,384,14,'#ffd24a','center','#1a0606',4);
+    button('再試一次');
+  }
+  if(e>1.8)drawLinks();
+}
+
+/* --- 夜婆精 --- */
+function pickSpot(){
+  for(let k=0;k<30;k++){
+    const x=rand(52,348),y=rand(120,630);
+    if(bats.every(b=>b.state==='dying'||Math.hypot(b.x-x,b.y-y)>90))return{x,y};
+  }
+  return{x:rand(52,348),y:rand(120,630)};
+}
+function batLife(){return t>=CFG.nightPhaseAt?rand(1.5,2.1):rand(2.4,3.2)}
+function spawnBat(){
+  const s=pickSpot();
+  bats.push({x:s.x,y:s.y,age:0,life:batLife(),state:'on',wt:0,ph:rand(0,6)});
+  sparks(s.x,s.y,['#7a48a8','#3a1a5a','#c8a0f0'],12,90);sfx.bat();
+}
+function relocate(b){
+  const s=pickSpot();b.x=s.x;b.y=s.y;b.age=0;b.life=batLife();b.state='on';
+  sparks(b.x,b.y,['#7a48a8','#3a1a5a','#c8a0f0'],10,90);
+}
+function nightFail(){
+  state='lose';loseNight=true;endT=0;loseT=0;paused=false;bats=[];lp=null;flashes=[];rings=[];
+  initPanic();BTN.y=408;shake=0;flash=.8;sfx.lose();musStop();
+}
+function nightPenalty(b,pen,msg){
+  if(state!=='night')return;
+  score=Math.max(0,score-pen);
+  floater(b.x,b.y-34,msg+' -'+pen,'#ff6a4a',20);
+  sparks(b.x,b.y,['#ff6a4a','#7a48a8'],8,100);sfx.miss();
+  b.state='warp';b.wt=.3;
+  if(score<=0)nightFail();
+}
+function capture(b){
+  const quick=b.age<b.life*.4,pts=CFG.nightCatch+(quick?CFG.nightQuick:0);
+  score+=pts;ns.caught++;
+  floater(b.x,b.y-30,'+'+pts+(quick?' 神速！':''),'#ffd24a',quick?24:22);
+  sparks(b.x,b.y,['#fff','#ffe27a','#ffb020'],16,160);
+  rings.push({x:b.x,y:b.y,age:0});sfx.catch();
+  b.state='dying';b.wt=.5;
+}
+function polyInside(x,y,poly){
+  let c=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const a=poly[i],b=poly[j];
+    if((a.y>y)!==(b.y>y)&&x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x)c=!c;
+  }
+  return c;
+}
+function segX(a,b,c,d){
+  const rx=b.x-a.x,ry=b.y-a.y,sx=d.x-c.x,sy=d.y-c.y,den=rx*sy-ry*sx;
+  if(Math.abs(den)<1e-9)return null;
+  const u=((c.x-a.x)*ry-(c.y-a.y)*rx)/den,v=((c.x-a.x)*sy-(c.y-a.y)*sx)/den;
+  return(u>=0&&u<=1&&v>=0&&v<=1)?{x:a.x+v*rx,y:a.y+v*ry}:null;
+}
+const BAT_PTS=[[0,0],[34,0],[-34,0],[0,15],[0,-15],[22,10],[-22,10],[22,-10],[-22,-10]];
+function evalLoop(poly,gapOk){
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const p of poly){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y)}
+  if(x1-x0<34||y1-y0<34)return;
+  if(x1-x0>CFG.nightMaxLoop||y1-y0>CFG.nightMaxLoop){floater((x0+x1)/2,(y0+y1)/2,'圈太大了','#ffe9b0',18);return}
+  let ok=false,bad=false;
+  for(const b of bats.slice()){
+    if(b.state!=='on'||b.age<.12)continue;
+    let n=0;
+    for(const q of BAT_PTS)if(polyInside(b.x+q[0],b.y+q[1],poly))n++;
+    if(n===BAT_PTS.length&&gapOk){capture(b);ok=true}
+    else if(n>0){nightPenalty(b,CFG.nightIncompletePen,'沒圈住！');ns.incomplete++;bad=true}
+  }
+  flashes.push({pts:poly.slice(),age:0,ok:ok||!bad});
+}
+function nightMove(p){
+  if(!lp)return;
+  const l=lp.pts[lp.pts.length-1],d=Math.hypot(p.x-l.x,p.y-l.y);
+  if(d<4)return;
+  lp.pts.push({x:p.x,y:p.y});lp.len+=d;
+  if(lp.len>950){lp.pts=[{x:p.x,y:p.y}];lp.len=0;return}
+  const pts=lp.pts,n=pts.length;
+  if(n>=5){
+    for(let i=0;i<n-3;i++){
+      const x=segX(pts[i],pts[i+1],pts[n-2],pts[n-1]);
+      if(x){
+        let len=0;for(let k=i+1;k<n-1;k++)len+=Math.hypot(pts[k+1].x-pts[k].x,pts[k+1].y-pts[k].y);
+        if(len<70)continue;
+        evalLoop([x].concat(pts.slice(i+1,n-1),[x]),true);
+        lp.pts=[{x:p.x,y:p.y}];lp.len=0;return;
+      }
+    }
+  }
+  if(lp.len>=110){
+    const s=pts[0];
+    if(Math.hypot(p.x-s.x,p.y-s.y)<28){evalLoop(pts.slice(),true);lp.pts=[{x:p.x,y:p.y}];lp.len=0}
+  }
+}
+function endLoop(){
+  if(lp&&lp.len>=90){
+    const pts=lp.pts,gap=Math.hypot(pts[0].x-pts[pts.length-1].x,pts[0].y-pts[pts.length-1].y);
+    evalLoop(pts.slice(),gap<=70);
+  }
+  lp=null;
+}
+function startNight(){
+  state='night';t=0;bats=[];rings=[];flashes=[];lp=null;nSpawn=.4;nPhase2=false;nEnding=false;nEndT=0;
+  parts=[];floaters=[];announce=2.4;annMsg=['收服夜婆精！','在牠消失前，用手指畫圈圈住牠'];
+  ns.caught=0;ns.timeout=0;ns.incomplete=0;nSlot=0;
+  initNightAssets();musStart();sfx.alarm();
+}
+function enterStory(){
+  state='story';storyPage=0;storyT=0;paused=false;
+  bombs=[];charms=[];parts=[];floaters=[];trail=[];fxBooms=[];bgBooms=[];decorBombs=[];
+  cake=null;cakeG=null;eater=null;boss.on=false;flash=0;
+  initNightAssets();musStop();sfx.egg();
+}
+function endNight(){
+  bonusPlayed=true;bats=[];lp=null;
+  winSetup();
+}
+function updFx(dt){
+  for(const p of parts){p.life-=dt;p.vy+=p.g*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.s+=p.grow*dt}
+  parts=parts.filter(p=>p.life>0);
+  for(const f of floaters){f.life-=dt;f.y-=36*dt}
+  floaters=floaters.filter(f=>f.life>0);
+}
+function updateNight(dt){
+  t+=dt;
+  for(const c of nClouds){c.x+=c.s*dt;if(c.x>W+20)c.x=-c.w-20}
+  updFx(dt);
+  for(const r of rings)r.age+=dt;
+  rings=rings.filter(r=>r.age<.6);
+  for(const f of flashes)f.age+=dt;
+  flashes=flashes.filter(f=>f.age<.4);
+  announce=Math.max(0,announce-dt);
+  const slot=Math.floor(t/20);
+  if(slot!==nSlot){nSlot=slot;if(!nEnding&&t<CFG.nightDuration){announce=1.8;annMsg=BG_NAMES[Math.min(2,slot)];sfx.egg()}}
+  const B=t>=CFG.nightPhaseAt;
+  if(B&&!nPhase2){nPhase2=true;announce=2;annMsg=['夜婆精加速！','出現、消失都更快了'];sfx.alarm();shake=.4}
+  shake=Math.max(0,shake-dt*1.5);
+  if(!nEnding){
+    nSpawn-=dt;
+    const alive=bats.filter(b=>b.state!=='dying').length,cap=t<10?2:CFG.nightMax;
+    if(nSpawn<=0&&alive<cap){spawnBat();nSpawn=B?rand(.25,.6):rand(.5,1)}
+    for(const b of bats){
+      if(b.state==='on'){b.age+=dt;if(b.age>=b.life){ns.timeout++;nightPenalty(b,CFG.nightTimeoutPen,'逃走了！')}}
+      else if(b.state==='warp'){b.wt-=dt;if(b.wt<=0)relocate(b)}
+      else if(b.state==='dying'){b.wt-=dt}
+    }
+    bats=bats.filter(b=>!(b.state==='dying'&&b.wt<=0));
+    if(t>=CFG.nightDuration){
+      nEnding=true;nEndT=0;lp=null;
+      for(const b of bats){b.state='dying';b.wt=.5;sparks(b.x,b.y,['#7a48a8','#fff'],14,140)}
+      sfx.win();
+    }
+  }else{
+    nEndT+=dt;
+    for(const b of bats)b.wt-=dt;
+    bats=bats.filter(b=>b.wt>0);
+    if(nEndT>1.3)endNight();
+  }
+}
+/* --- 繪製 --- */
+function drawBat(b){
+  let a=1,sc=1,rot=0;
+  if(b.state==='on')a=Math.min(1,b.age/(t>=CFG.nightPhaseAt?.18:.25));
+  else if(b.state==='warp')a=Math.max(0,b.wt/.3);
+  else{a=Math.max(0,b.wt/.5);sc=1+(1-a)*.6;rot=(1-a)*5}
+  const hx=Math.sin(clock*3+b.ph)*2,hy=Math.cos(clock*2.4+b.ph)*2;
+  ctx.save();ctx.globalAlpha=a;
+  ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(b.x+10,b.y+22,34,8,0,0,6.283);ctx.fill();
+  ctx.translate(b.x+hx,b.y+hy);ctx.rotate(rot);
+  ctx.scale(sc,sc*(1+Math.sin(clock*14+b.ph)*.07));
+  spr(BAT,PAL_BAT,-BAT_W/2,-BAT_H/2,BAT_PX);
+  ctx.restore();
+  if(b.state==='on'){
+    const k=1-b.age/b.life;
+    ctx.save();ctx.lineCap='round';
+    ctx.strokeStyle=k>.35?'rgba(255,255,255,.55)':'rgba(255,90,70,.9)';ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(b.x,b.y,44,-Math.PI/2,-Math.PI/2+6.283*k);ctx.stroke();
+    ctx.restore();
+  }
+  ctx.globalAlpha=1;
+}
+function drawNightClouds(alpha){
+  ctx.imageSmoothingEnabled=false;
+  for(const c of nClouds){ctx.globalAlpha=alpha;ctx.drawImage(c.img,rnd(c.x),rnd(c.y),c.w,c.h)}
+  ctx.globalAlpha=1;
+}
+function drawNightHud(){
+  txt('分數 '+score,12,24,22,'#fff3c0','left','#1a0a28',5);
+  const remain=Math.max(0,CFG.nightDuration-t);
+  txt('剩 '+Math.ceil(remain)+' 秒',186,24,19,'#fff','center','#1a0a28',5);
+  R('rgba(0,0,0,.55)',16,42,368,8);
+  R(nPhase2?'#c8a0f0':'#ffd24a',18,44,364*clamp(t/CFG.nightDuration,0,1),4);
+  R('#fff',16+368*(CFG.nightPhaseAt/CFG.nightDuration)-1,40,2,12);
+  R('rgba(0,0,0,.5)',326,8,30,26);
+  if(!paused){R('#fff',334,14,5,14);R('#fff',343,14,5,14)}
+  else{ctx.fillStyle='#fff';ctx.beginPath();ctx.moveTo(336,14);ctx.lineTo(348,21);ctx.lineTo(336,28);ctx.fill()}
+  R('rgba(0,0,0,.5)',362,8,30,26);
+  R('#fff',368,17,4,8);R('#fff',372,14,3,14);
+  if(!muted){R('#fff',379,17,2,8);R('#fff',383,14,2,14)}
+  else{ctx.strokeStyle='#ff5a4a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(378,14);ctx.lineTo(388,28);ctx.moveTo(388,14);ctx.lineTo(378,28);ctx.stroke()}
+  txt('隱藏關卡　'+BG_NAMES[Math.min(2,Math.floor(t/20))][0],12,64,13,'#d8c0f8','left','#1a0a28',4);
+  if(announce>0){
+    ctx.globalAlpha=Math.floor(clock*8)%2?1:.75;
+    txt(annMsg[0],200,300,38,'#ffd24a','center','#4a1a7a',8);
+    txt(annMsg[1],200,340,17,'#fff','center','#4a1a7a',5);
+    ctx.globalAlpha=1;
+  }
+}
+function drawDemo(cx,cy,tt){
+  const T=tt%5.2;
+  const ang=a=>({x:cx+Math.cos(a)*62,y:cy+Math.sin(a)*46});
+  const a0=-Math.PI/2;
+  if(T<3.6||T>4.6){
+    const al=T>4.6?clamp((T-4.6)/.5,0,1):clamp(T/.4,0,1);
+    ctx.globalAlpha=al;spr(BAT,PAL_BAT,cx-BAT_W/2,cy-BAT_H/2,BAT_PX);ctx.globalAlpha=1;
+  }
+  const drawT=clamp((T-.9)/1.7,0,1);
+  if(T>.9&&T<3.2){
+    const n=Math.round(drawT*40),end=a0+drawT*6.7;
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+    for(const [c,w] of [['rgba(255,200,80,.5)',9],['#fff3b0',4]]){
+      ctx.strokeStyle=c;ctx.lineWidth=w;ctx.beginPath();
+      for(let i=0;i<=n;i++){const p=ang(a0+(end-a0)*i/Math.max(1,n));i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)}
+      ctx.stroke();
+    }
+    ctx.restore();
+    const f=ang(end);
+    ctx.fillStyle='rgba(255,255,255,.35)';ctx.beginPath();ctx.arc(f.x,f.y,15,0,6.283);ctx.fill();
+    ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(f.x,f.y,8,0,6.283);ctx.fill();
+  }
+  if(T>2.6&&T<3.6){
+    const k=(T-2.6)/1;ctx.strokeStyle='rgba(255,226,120,'+(1-k)+')';ctx.lineWidth=4;
+    ctx.beginPath();ctx.arc(cx,cy,30+k*50,0,6.283);ctx.stroke();
+    ctx.globalAlpha=1-k;txt('+20',cx,cy-60-k*20,26,'#ffd24a','center','#1a0606',5);ctx.globalAlpha=1;
+  }
+}
+function drawStory(){
+  const base=sceneN;
+  if(base)ctx.drawImage(base,0,0,W,H);
+  ctx.fillStyle='rgba(8,4,24,.68)';ctx.fillRect(0,0,W,H);
+  const e=storyT;
+  if(storyPage===0){
+    txt('★ 隱藏關卡 ★',200,50,17,'#ffd24a','center','#1a0a28',5);
+    txt('媽祖收服夜婆精',200,92,34,'#fff3d0','center','#5a1a8a',9);
+    R('#e0a526',22,128,356,366);R('#1c0c30',24,130,352,362);
+    const lines=storyLines();
+    let left=Math.floor(e*STORY_CPS);
+    lines.forEach((ln,i)=>{
+      if(left<=0)return;
+      const part=ln.slice(0,left);left-=ln.length;
+      txt(part,42,166+i*33,16,'#fff3d0','left',null);
+    });
+    if(storyDone()){
+      if(Math.floor(clock*2)%2)txt('— 點擊畫面繼續 —',200,540,20,'#fff','center','#4a1a7a',6);
+    }else txt('點一下可跳過',200,540,14,'#c8b0e8','center','#1a0a28',4);
+  }else{
+    txt('玩法教學',200,52,30,'#ffd24a','center','#5a1a8a',8);
+    R('#e0a526',58,86,284,224);R('rgba(10,4,26,.82)',60,88,280,220);
+    ctx.save();ctx.beginPath();ctx.rect(60,88,280,220);ctx.clip();drawDemo(200,198,e);ctx.restore();
+    const L=['夜婆精會隨機短暫出現','在牠消失前，用手指畫圈把牠圈住','完整圈住 +'+CFG.nightCatch+' 分（動作快更多）','沒圈到、圈不完整或逃走會扣分並換位置','同時最多 3 隻，限時 60 秒（剩 30 秒加速）'];
+    L.forEach((s,i)=>{
+      ctx.fillStyle='#ffd24a';ctx.beginPath();ctx.arc(46,350+i*38,11,0,6.283);ctx.fill();
+      txt(String(i+1),46,351+i*38,14,'#4a1a10','center',null);
+      txt(s,68,350+i*38,15,'#fff3d0','left','#1a0a28',4);
+    });
+    button('開始收服！',STORY_BTN);
+  }
+  if(e<.5){ctx.fillStyle='rgba(255,255,255,'+(.5-e)*1.6+')';ctx.fillRect(0,0,W,H)}
+}
+function drawBonus(){
+  ctx.save();
+  if(state==='night'&&shake>0)ctx.translate(rand(-1,1)*shake*8,rand(-1,1)*shake*8);
+  if(state==='story'){drawStory();ctx.restore();
+    R('rgba(0,0,0,.5)',362,8,30,26);R('#fff',368,17,4,8);R('#fff',372,14,3,14);
+    if(!muted){R('#fff',379,17,2,8);R('#fff',383,14,2,14)}
+    else{ctx.strokeStyle='#ff5a4a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(378,14);ctx.lineTo(388,28);ctx.moveTo(388,14);ctx.lineTo(378,28);ctx.stroke()}
+    return}
+  {
+    const sc=[sceneN,sceneN2,sceneN3],slot=Math.min(2,Math.floor(t/20)),fade=clamp((t-slot*20)/1.2,0,1);
+    if(slot>0&&fade<1){ctx.drawImage(sc[slot-1],0,0,W,H);ctx.globalAlpha=fade;ctx.drawImage(sc[slot],0,0,W,H);ctx.globalAlpha=1}
+    else if(sc[slot])ctx.drawImage(sc[slot],0,0,W,H);
+  }
+  // 雲影
+  ctx.imageSmoothingEnabled=false;
+  for(const c of nClouds){ctx.globalAlpha=.16;ctx.drawImage(c.sh,rnd(c.x+36),rnd(c.y+64),c.w,c.h)}
+  ctx.globalAlpha=1;
+  for(const b of bats)drawBat(b);
+  for(const r of rings){
+    const k=r.age/.6;ctx.strokeStyle='rgba(255,226,120,'+(1-k)+')';ctx.lineWidth=5*(1-k)+1;
+    ctx.beginPath();ctx.arc(r.x,r.y,20+k*60,0,6.283);ctx.stroke();
+  }
+  for(const f of flashes){
+    const k=f.age/.4;
+    ctx.beginPath();f.pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();
+    ctx.fillStyle=(f.ok?'rgba(255,226,120,':'rgba(255,90,70,')+(.3*(1-k))+')';ctx.fill();
+    ctx.strokeStyle=(f.ok?'rgba(255,240,170,':'rgba(255,120,100,')+(1-k)+')';ctx.lineWidth=4;ctx.stroke();
+  }
+  if(lp&&lp.pts.length>1){
+    ctx.lineCap='round';ctx.lineJoin='round';
+    for(const [c,w] of [['rgba(255,200,80,.45)',11],['rgba(255,245,190,.95)',4]]){
+      ctx.strokeStyle=c;ctx.lineWidth=w;ctx.beginPath();
+      lp.pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
+    }
+  }
+  drawFx();
+  drawNightClouds(.3);
+  ctx.restore();
+  drawNightHud();
+}
+
 /* ====== 輸入 ====== */
 const ptrs=new Map();
 function pos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width*W,y:(e.clientY-r.top)/r.height*H}}
 function togglePause(){
-  if(state!=='play')return;
-  paused=!paused;ptrs.clear();trail=[];
+  if(state!=='play'&&state!=='night')return;
+  paused=!paused;ptrs.clear();trail=[];lp=null;
 }
 let linkDown=null;
 cv.addEventListener('pointerdown',e=>{
@@ -1500,8 +2225,13 @@ cv.addEventListener('pointerdown',e=>{
   try{cv.setPointerCapture(e.pointerId)}catch(_){}
   const p=pos(e);
   if(p.x>=358&&p.y<40){muted=!muted;return}
-  if(state==='play'&&p.x>=322&&p.x<358&&p.y<40){togglePause();return}
-  if(state==='title'){startGame();ptrs.set(e.pointerId,{x:p.x,y:p.y,dx:0,dy:0});return}
+  if((state==='play'||state==='night')&&p.x>=322&&p.x<358&&p.y<40){togglePause();return}
+  if(state==='title'){if(CFG.testButton&&inRect(p,TESTBTN)){startBonusTest();return}startGame();ptrs.set(e.pointerId,{x:p.x,y:p.y,dx:0,dy:0});return}
+  if(state==='story'){
+    if(storyPage===0){if(storyDone()){storyPage=1;storyT=0}else storyT=1e4}
+    else if(storyT>.5&&inRect(p,STORY_BTN))startNight();
+    return;
+  }
   if(state==='win'||state==='lose'){
     if(endT>(state==='win'?2.2:1.9)&&inRect(p,BTN))startGame();
     return;
@@ -1511,9 +2241,11 @@ cv.addEventListener('pointerdown',e=>{
     else if(inRect(p,PB2))startGame();
     return;
   }
+  if(state==='night'){lp={id:e.pointerId,pts:[{x:p.x,y:p.y}],len:0};return}
   ptrs.set(e.pointerId,{x:p.x,y:p.y,dx:0,dy:0});
 });
 cv.addEventListener('pointermove',e=>{
+  if(state==='night'&&!paused&&lp&&lp.id===e.pointerId){e.preventDefault();nightMove(pos(e));return}
   const q=ptrs.get(e.pointerId);if(!q)return;
   e.preventDefault();
   if(paused||state!=='play')return;
@@ -1527,19 +2259,20 @@ cv.addEventListener('pointermove',e=>{
 const endPtr=e=>{ptrs.delete(e.pointerId)};
 cv.addEventListener('pointerup',e=>{
   endPtr(e);
+  if(lp&&lp.id===e.pointerId){if(state==='night'&&!paused)endLoop();else lp=null}
   const L=linkAt(pos(e));
   if(L&&L===linkDown){try{window.open(L.url,'_blank','noopener,noreferrer')}catch(_){}}
   linkDown=null;
 });
 cv.addEventListener('pointermove',e=>{cv.style.cursor=linkAt(pos(e))?'pointer':''});
 cv.addEventListener('pointerleave',()=>{cv.style.cursor=''});
-cv.addEventListener('pointercancel',endPtr);
+cv.addEventListener('pointercancel',e=>{endPtr(e);if(lp&&lp.id===e.pointerId)lp=null});
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'||e.key==='p'||e.key==='P'||e.key===' '){e.preventDefault();togglePause()}
 });
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&state==='play'&&!paused)togglePause()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&(state==='play'||state==='night')&&!paused)togglePause()});
 
 /* ====== 主迴圈 ====== */
 let last=0;
@@ -1552,6 +2285,7 @@ function frame(ts){
 }
 reset();
 resize();
+if(location.hash==='#bonus'){bonusUnlocked=true;score=500;state='play';enterStory()}   // 網址加 #bonus 可直接測試隱藏關卡
 requestAnimationFrame(frame);
 /*DEBUG_HOOK*/
 })();
