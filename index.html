@@ -30,6 +30,9 @@ const CFG={
   stars:[600,1300,2200,3500],   // 結算星等門檻（2/3/4/5 星）。沒玩過隱藏關卡最高只給 3 星
   nightDuration:60, nightPhaseAt:30, nightMax:3,          // 隱藏關卡：總秒數、加速時間點、同屏最多夜婆精數
   nightCatch:20, nightQuick:5, nightTimeoutPen:10, nightIncompletePen:5,   // 圈住加分／快速加成／逃走扣分／圈不完整扣分
+  nightSizeMul:{small:.72,mid:1,large:1.35}, nightGreenChance:.3,      // 夜婆精大小隻比例與深綠色出現機率
+  nightBossAt:50, nightBossHP:3, nightBossSpeed:80, nightBossDrain:5,  // 最後10秒巨蝠：出現時間、需圈住次數、移動速度、每秒扣分
+  nightBossCatch:50, nightBossKill:100,                                // 巨蝠每次圈中加分、第三次（收服）加分
   nightMaxLoop:230,                                       // 圈的最大尺寸(px)，避免一個大圈圈住全部
   downLimit:.35,      // 撥動方向的垂直分量 ≥ 此值視為「往下撥」
   speed1:85, speed2:140,       // 轟炸機速度（第一/第二階段）
@@ -1466,7 +1469,7 @@ function drawWinPanel(){
   const names=['驚險過關','平安護境','神蹟顯靈','護境傳奇','神威無雙'];
   let st='';for(let i=0;i<5;i++)st+=i<stars?'★':'☆';
   txt(st,200,284+oy,26,'#ffd24a','center','#1a0606',5);
-  txt(names[stars-1]+(boss.dead?'　★ 擊落 Boss':''),200,306+oy,14,'#fff3d0','center','#1a0606',4);
+  txt(names[stars-1]+(boss.dead?'　★ 擊落 Boss':'')+(nbDead?'　★ 收服巨蝠':''),200,306+oy,14,'#fff3d0','center','#1a0606',4);
   txt('最終分數　'+score,200,334+oy,26,'#fff','center','#7a1010',6);
   txt(bonusPlayed?'彈開 '+stats.deflected+' 顆　夜婆精 '+ns.caught+' 隻　連擊 '+maxCombo:'彈開 '+stats.deflected+' 顆　護身符 '+stats.charms+' 張　最高連擊 '+maxCombo,200,360+oy,14,'#ffe9b0','center','#1a0606',4);
   txt('最高紀錄　'+best+(score>=best?'（新紀錄！）':''),200,382+oy,14,'#ffd24a','center','#1a0606',4);
@@ -1567,10 +1570,13 @@ const BAT=[
 const PAL_BAT={P:'#532a62',N:'#10204a',C:'#f0d890',E:'#d82020',K:'#0a0a10',R:'#d02828'};
 const PAL_BAT2={P:'#532a62',N:'#10204a',C:'#f0d890',E:'#ffe060',K:'#0a0a10',R:'#d02828'};
 const BAT_PX=2,BAT_W=BAT[0].length*BAT_PX,BAT_H=BAT.length*BAT_PX;
+const PAL_BATG={P:'#1f5a34',N:'#0a2a1c',C:'#e8d890',E:'#ff3a2a',K:'#06100a',R:'#d02828'};      // 深綠色夜婆精
+const PAL_BATB={P:'#5a1428',N:'#2a0814',C:'#ffd870',E:'#ffee40',K:'#0a0408',R:'#ff4a3a'};      // 巨蝠
 let bats=[],rings=[],flashes=[],lp=null,nSpawn=.4,nPhase2=false,nEnding=false,nEndT=0;
 let storyPage=0,storyT=0;
 const storyDone=()=>storyT*STORY_CPS>=STORY_TEXT.length;
-const ns={caught:0,timeout:0,incomplete:0};
+const ns={caught:0,timeout:0,incomplete:0,boss:0};
+let nboss=null,nbDead=false;
 const STORY_BTN={x:110,y:588,w:180,h:44};
 const nClouds=[];
 const STORY_TEXT='相傳很久以前在後庄有夜婆精作亂，地方苦不堪言，萬丹媽出手後，夜婆精趁亂逃跑到現在的新庄仔，無奈夜婆精率領了太多山精野怪，新興宮上帝公也制服不了，只好請出萬丹媽再次趕跑夜婆精，這次夜婆精跑到了竹田頓物庄一帶作怪，只好第三次請出萬丹媽，這次總算徹底收服了夜婆精。從此竹田一帶的人也對萬丹媽敬佩萬分，一起加入了萬丹媽的三十六庄頭香境中。';
@@ -1905,25 +1911,28 @@ function drawNightLose(){
 }
 
 /* --- 夜婆精 --- */
-function pickSpot(){
+function pickSpot(m){
+  m=m||52;
   for(let k=0;k<30;k++){
-    const x=rand(52,348),y=rand(120,630);
-    if(bats.every(b=>b.state==='dying'||Math.hypot(b.x-x,b.y-y)>90))return{x,y};
+    const x=rand(m,W-m),y=rand(120,630);
+    if(bats.every(b=>b.state==='dying'||Math.hypot(b.x-x,b.y-y)>90)&&(!nboss||Math.hypot(nboss.x-x,nboss.y-y)>150))return{x,y};
   }
-  return{x:rand(52,348),y:rand(120,630)};
+  return{x:rand(m,W-m),y:rand(120,630)};
 }
 function batLife(){return t>=CFG.nightPhaseAt?rand(1.5,2.1):rand(2.4,3.2)}
 function spawnBat(){
-  const s=pickSpot();
-  bats.push({x:s.x,y:s.y,age:0,life:batLife(),state:'on',wt:0,ph:rand(0,6)});
-  sparks(s.x,s.y,['#7a48a8','#3a1a5a','#c8a0f0'],12,90);sfx.bat();
+  const M=CFG.nightSizeMul,r=Math.random(),sz=r<.3?M.small:r<.75?M.mid:M.large,g=Math.random()<CFG.nightGreenChance;
+  const s=pickSpot(Math.ceil(46*sz)+8);
+  const b={x:s.x,y:s.y,age:0,sz,kind:g?'g':'p',lf:(g?.85:1)*(sz<1?.9:sz>1?1.1:1),life:1,state:'on',wt:0,ph:rand(0,6)};
+  b.life=batLife()*b.lf;bats.push(b);
+  sparks(s.x,s.y,g?['#2a8a4a','#0a2a1c','#a0e8b0']:['#7a48a8','#3a1a5a','#c8a0f0'],12,90);sfx.bat();
 }
 function relocate(b){
-  const s=pickSpot();b.x=s.x;b.y=s.y;b.age=0;b.life=batLife();b.state='on';
-  sparks(b.x,b.y,['#7a48a8','#3a1a5a','#c8a0f0'],10,90);
+  const s=pickSpot(Math.ceil(46*b.sz)+8);b.x=s.x;b.y=s.y;b.age=0;b.life=batLife()*b.lf;b.state='on';
+  sparks(b.x,b.y,b.kind==='g'?['#2a8a4a','#0a2a1c','#a0e8b0']:['#7a48a8','#3a1a5a','#c8a0f0'],10,90);
 }
 function nightFail(){
-  state='lose';loseNight=true;endT=0;loseT=0;paused=false;bats=[];lp=null;flashes=[];rings=[];
+  state='lose';loseNight=true;endT=0;loseT=0;paused=false;nboss=null;bats=[];lp=null;flashes=[];rings=[];
   initPanic();BTN.y=408;shake=0;flash=.8;sfx.lose();musStop();
 }
 function nightPenalty(b,pen,msg){
@@ -1935,9 +1944,9 @@ function nightPenalty(b,pen,msg){
   if(score<=0)nightFail();
 }
 function capture(b){
-  const quick=b.age<b.life*.4,pts=CFG.nightCatch+(quick?CFG.nightQuick:0);
+  const quick=b.age<b.life*.4,base=b.sz<1?25:b.sz>1?15:20,pts=base+(b.kind==='g'?5:0)+(quick?CFG.nightQuick:0);
   score+=pts;ns.caught++;
-  floater(b.x,b.y-30,'+'+pts+(quick?' 神速！':''),'#ffd24a',quick?24:22);
+  floater(b.x,b.y-30*b.sz,'+'+pts+(quick?' 神速！':''),'#ffd24a',quick?24:22);
   sparks(b.x,b.y,['#fff','#ffe27a','#ffb020'],16,160);
   rings.push({x:b.x,y:b.y,age:0});sfx.catch();
   b.state='dying';b.wt=.5;
@@ -1963,14 +1972,70 @@ function evalLoop(poly,gapOk){
   if(x1-x0<34||y1-y0<34)return;
   if(x1-x0>CFG.nightMaxLoop||y1-y0>CFG.nightMaxLoop){floater((x0+x1)/2,(y0+y1)/2,'圈太大了','#ffe9b0',18);return}
   let ok=false,bad=false;
+  const cnt=(cx,cy,k)=>{let n=0;for(const q of BAT_PTS)if(polyInside(cx+q[0]*k,cy+q[1]*k,poly))n++;return n};
   for(const b of bats.slice()){
     if(b.state!=='on'||b.age<.12)continue;
-    let n=0;
-    for(const q of BAT_PTS)if(polyInside(b.x+q[0],b.y+q[1],poly))n++;
+    const n=cnt(b.x,b.y,b.sz);
     if(n===BAT_PTS.length&&gapOk){capture(b);ok=true}
     else if(n>0){nightPenalty(b,CFG.nightIncompletePen,'沒圈住！');ns.incomplete++;bad=true}
   }
+  const B=nboss;
+  if(B&&B.age>=.8&&B.inv<=0){
+    const n=cnt(B.x,B.y,1.7);
+    if(n===BAT_PTS.length&&gapOk){hitBoss();ok=true}
+    else if(n>0){floater(B.x,B.y-70,'沒圈住！','#ff6a4a',18);sfx.miss();bad=true}
+  }
   flashes.push({pts:poly.slice(),age:0,ok:ok||!bad});
+}
+function spawnNightBoss(){
+  nboss={x:rand(130,270),y:140,vx:0,vy:60,tx:rand(90,310),ty:rand(200,560),tt:1.5,hp:CFG.nightBossHP,age:0,inv:0,boost:0,acc:0,fl:.6};
+  announce=2.4;annMsg=['最後 10 秒！','巨蝠現身　持續扣分　圈住牠三次'];shake=.5;sfx.alarm();
+}
+function updNightBoss(dt){
+  const B=nboss;
+  B.age+=dt;B.inv=Math.max(0,B.inv-dt);B.boost=Math.max(0,B.boost-dt);B.tt-=dt;
+  if(B.tt<=0||Math.hypot(B.tx-B.x,B.ty-B.y)<30){B.tx=rand(90,310);B.ty=rand(140,600);B.tt=rand(1,2)}
+  let ax=0,ay=0;                                   // 閃避其他蝙蝠，避免重疊
+  for(const b of bats){if(b.state==='dying')continue;const dx=B.x-b.x,dy=B.y-b.y,dd=Math.hypot(dx,dy)||1,R=150*Math.max(1,b.sz*.9);
+    if(dd<R){const w=(1-dd/R)*2.2;ax+=dx/dd*w;ay+=dy/dd*w}}
+  const sp=CFG.nightBossSpeed*(lp&&lp.len>30?.5:1)*(B.boost>0?1.9:1),d=Math.hypot(B.tx-B.x,B.ty-B.y)||1;
+  const k=Math.min(1,dt*2.5);
+  B.vx+=((B.tx-B.x)/d*sp+ax*sp-B.vx)*k;B.vy+=((B.ty-B.y)/d*sp+ay*sp-B.vy)*k;
+  B.x=clamp(B.x+B.vx*dt,80,320);B.y=clamp(B.y+B.vy*dt,130,620);
+  B.acc+=CFG.nightBossDrain*dt;
+  if(B.acc>=1){const n=Math.floor(B.acc);B.acc-=n;score=Math.max(0,score-n);if(score<=0){nightFail();return}}
+  B.fl-=dt;
+  if(B.fl<=0){B.fl=1;floater(B.x,B.y-72,'-'+CFG.nightBossDrain+'/秒','#ff5a4a',16)}
+}
+function hitBoss(){
+  const B=nboss;B.hp--;ns.boss++;
+  if(B.hp>0){
+    score+=CFG.nightBossCatch;
+    floater(B.x,B.y-72,'+'+CFG.nightBossCatch+'　還要 '+B.hp+' 次','#ffd24a',24);
+    rings.push({x:B.x,y:B.y,age:0});sparks(B.x,B.y,['#fff','#ffe27a','#ff6a4a'],20,200);
+    sfx.catch();B.inv=.8;B.boost=1.2;B.tt=0;
+  }else{
+    score+=CFG.nightBossKill;nbDead=true;
+    floater(B.x,B.y-72,'+'+CFG.nightBossKill+' 收服！','#ffd24a',30);
+    for(let i=0;i<3;i++)rings.push({x:B.x,y:B.y,age:-i*.15});
+    sparks(B.x,B.y,['#fff','#ffe27a','#ffb020','#ff6a4a'],40,260);
+    sfx.win();shake=.6;announce=2.2;annMsg=['巨蝠被收服！','持續扣分解除'];
+    nboss=null;
+  }
+}
+function drawNightBoss(){
+  const B=nboss;if(!B)return;
+  const a=Math.min(1,B.age/.8),bob=Math.sin(clock*3)*3;
+  ctx.save();ctx.globalAlpha=a;
+  const g=ctx.createRadialGradient(B.x,B.y,10,B.x,B.y,125);
+  g.addColorStop(0,'rgba(255,40,40,'+(.32+.14*Math.sin(clock*6))+')');g.addColorStop(1,'rgba(255,40,40,0)');
+  ctx.fillStyle=g;ctx.fillRect(B.x-125,B.y-125,250,250);
+  ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(B.x+16,B.y+40,58,12,0,0,6.283);ctx.fill();
+  if(B.inv>0&&Math.floor(clock*14)%2)ctx.globalAlpha=a*.45;
+  ctx.translate(B.x,B.y+bob);ctx.scale(1.7,1.7*(1+Math.sin(clock*12)*.07));
+  spr(BAT,PAL_BATB,-BAT_W/2,-BAT_H/2,BAT_PX);
+  ctx.restore();
+  for(let i=0;i<CFG.nightBossHP;i++)txt('♥',B.x+(i-(CFG.nightBossHP-1)/2)*20,B.y-62,18,i<B.hp?'#ff4a5a':'#4a2a3a','center','#1a0a28',4);
 }
 function nightMove(p){
   if(!lp)return;
@@ -2005,7 +2070,7 @@ function endLoop(){
 function startNight(){
   state='night';t=0;bats=[];rings=[];flashes=[];lp=null;nSpawn=.4;nPhase2=false;nEnding=false;nEndT=0;
   parts=[];floaters=[];announce=2.4;annMsg=['收服夜婆精！','在牠消失前，用手指畫圈圈住牠'];
-  ns.caught=0;ns.timeout=0;ns.incomplete=0;nSlot=0;
+  ns.caught=0;ns.timeout=0;ns.incomplete=0;ns.boss=0;nSlot=0;nboss=null;nbDead=false;
   initNightAssets();musStart();sfx.alarm();
 }
 function enterStory(){
@@ -2015,7 +2080,7 @@ function enterStory(){
   initNightAssets();musStop();sfx.egg();
 }
 function endNight(){
-  bonusPlayed=true;bats=[];lp=null;
+  bonusPlayed=true;bats=[];lp=null;nboss=null;
   winSetup();
 }
 function updFx(dt){
@@ -2039,6 +2104,9 @@ function updateNight(dt){
   if(B&&!nPhase2){nPhase2=true;announce=2;annMsg=['夜婆精加速！','出現、消失都更快了'];sfx.alarm();shake=.4}
   shake=Math.max(0,shake-dt*1.5);
   if(!nEnding){
+    if(!nboss&&!nbDead&&t>=CFG.nightBossAt)spawnNightBoss();
+    if(nboss)updNightBoss(dt);
+    if(state!=='night')return;
     nSpawn-=dt;
     const alive=bats.filter(b=>b.state!=='dying').length,cap=t<10?2:CFG.nightMax;
     if(nSpawn<=0&&alive<cap){spawnBat();nSpawn=B?rand(.25,.6):rand(.5,1)}
@@ -2050,6 +2118,7 @@ function updateNight(dt){
     bats=bats.filter(b=>!(b.state==='dying'&&b.wt<=0));
     if(t>=CFG.nightDuration){
       nEnding=true;nEndT=0;lp=null;
+      if(nboss){sparks(nboss.x,nboss.y,['#7a48a8','#fff'],24,160);nboss=null}
       for(const b of bats){b.state='dying';b.wt=.5;sparks(b.x,b.y,['#7a48a8','#fff'],14,140)}
       sfx.win();
     }
@@ -2066,18 +2135,18 @@ function drawBat(b){
   if(b.state==='on')a=Math.min(1,b.age/(t>=CFG.nightPhaseAt?.18:.25));
   else if(b.state==='warp')a=Math.max(0,b.wt/.3);
   else{a=Math.max(0,b.wt/.5);sc=1+(1-a)*.6;rot=(1-a)*5}
-  const hx=Math.sin(clock*3+b.ph)*2,hy=Math.cos(clock*2.4+b.ph)*2;
+  const hx=Math.sin(clock*3+b.ph)*2,hy=Math.cos(clock*2.4+b.ph)*2,z=b.sz;
   ctx.save();ctx.globalAlpha=a;
-  ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(b.x+10,b.y+22,34,8,0,0,6.283);ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(b.x+10*z,b.y+22*z,34*z,8*z,0,0,6.283);ctx.fill();
   ctx.translate(b.x+hx,b.y+hy);ctx.rotate(rot);
-  ctx.scale(sc,sc*(1+Math.sin(clock*14+b.ph)*.07));
-  spr(BAT,PAL_BAT,-BAT_W/2,-BAT_H/2,BAT_PX);
+  ctx.scale(sc*z,sc*z*(1+Math.sin(clock*14+b.ph)*.07));
+  spr(BAT,b.kind==='g'?PAL_BATG:PAL_BAT,-BAT_W/2,-BAT_H/2,BAT_PX);
   ctx.restore();
   if(b.state==='on'){
     const k=1-b.age/b.life;
     ctx.save();ctx.lineCap='round';
     ctx.strokeStyle=k>.35?'rgba(255,255,255,.55)':'rgba(255,90,70,.9)';ctx.lineWidth=3;
-    ctx.beginPath();ctx.arc(b.x,b.y,44,-Math.PI/2,-Math.PI/2+6.283*k);ctx.stroke();
+    ctx.beginPath();ctx.arc(b.x,b.y,30+16*z,-Math.PI/2,-Math.PI/2+6.283*k);ctx.stroke();
     ctx.restore();
   }
   ctx.globalAlpha=1;
@@ -2102,6 +2171,7 @@ function drawNightHud(){
   if(!muted){R('#fff',379,17,2,8);R('#fff',383,14,2,14)}
   else{ctx.strokeStyle='#ff5a4a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(378,14);ctx.lineTo(388,28);ctx.moveTo(388,14);ctx.lineTo(378,28);ctx.stroke()}
   txt('隱藏關卡　'+BG_NAMES[Math.min(2,Math.floor(t/20))][0],12,64,13,'#d8c0f8','left','#1a0a28',4);
+  if(nboss)txt('巨蝠 '+'♥'.repeat(nboss.hp)+'　持續扣分 -'+CFG.nightBossDrain+'/秒',12,82,13,'#ff8a8a','left','#1a0a28',4);
   if(announce>0){
     ctx.globalAlpha=Math.floor(clock*8)%2?1:.75;
     txt(annMsg[0],200,300,38,'#ffd24a','center','#4a1a7a',8);
@@ -2160,11 +2230,11 @@ function drawStory(){
     txt('玩法教學',200,52,30,'#ffd24a','center','#5a1a8a',8);
     R('#e0a526',58,86,284,224);R('rgba(10,4,26,.82)',60,88,280,220);
     ctx.save();ctx.beginPath();ctx.rect(60,88,280,220);ctx.clip();drawDemo(200,198,e);ctx.restore();
-    const L=['夜婆精會隨機短暫出現','在牠消失前，用手指畫圈把牠圈住','完整圈住 +'+CFG.nightCatch+' 分（動作快更多）','沒圈到、圈不完整或逃走會扣分並換位置','同時最多 3 隻，限時 60 秒（剩 30 秒加速）'];
+    const L=['夜婆精會隨機短暫出現','在牠消失前，用手指畫圈把牠圈住','完整圈住加分（動作快更多）','沒圈到、圈不完整或逃走會扣分並換位置','同時最多 3 隻，限時 60 秒（剩 30 秒加速）','大小隻分數不同，深綠色的消失更快','最後 10 秒巨蝠現身：持續扣分，圈 3 次才消除'];
     L.forEach((s,i)=>{
-      ctx.fillStyle='#ffd24a';ctx.beginPath();ctx.arc(46,350+i*38,11,0,6.283);ctx.fill();
-      txt(String(i+1),46,351+i*38,14,'#4a1a10','center',null);
-      txt(s,68,350+i*38,15,'#fff3d0','left','#1a0a28',4);
+      ctx.fillStyle='#ffd24a';ctx.beginPath();ctx.arc(46,340+i*34,10,0,6.283);ctx.fill();
+      txt(String(i+1),46,341+i*34,13,'#4a1a10','center',null);
+      txt(s,66,340+i*34,i===6?14:15,i===6?'#ffb0a0':'#fff3d0','left','#1a0a28',4);
     });
     button('開始收服！',STORY_BTN);
   }
@@ -2188,7 +2258,9 @@ function drawBonus(){
   for(const c of nClouds){ctx.globalAlpha=.16;ctx.drawImage(c.sh,rnd(c.x+36),rnd(c.y+64),c.w,c.h)}
   ctx.globalAlpha=1;
   for(const b of bats)drawBat(b);
+  drawNightBoss();
   for(const r of rings){
+    if(r.age<0)continue;
     const k=r.age/.6;ctx.strokeStyle='rgba(255,226,120,'+(1-k)+')';ctx.lineWidth=5*(1-k)+1;
     ctx.beginPath();ctx.arc(r.x,r.y,20+k*60,0,6.283);ctx.stroke();
   }
