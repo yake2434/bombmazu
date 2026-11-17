@@ -15,7 +15,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
 </head>
 <body>
 <div id="stage"><canvas id="c"></canvas></div>
-<noscript>2027丁未年三年一科萬丹迎媽祖，116年4月23~25日，歡迎來萬丹看熱鬧!</noscript>
+<noscript>請開啟 JavaScript 以遊玩。</noscript>
 <script>
 (()=>{
 'use strict';
@@ -168,10 +168,28 @@ function musStep(st,t0,lvl){
     if(s===0)mtone(mf(root+36),t0,.5,'sawtooth',.03,0,1500),mtone(mf(root+42),t0,.5,'sawtooth',.025,0,1500);
   }
 }
+// 故事／教學畫面：緩慢神祕的廟埕夜曲（A 小調五聲音階），教學頁加入輕快鼓點
+const S_MEL=[[0,76,6],[8,79,4],[12,76,4],[16,74,6],[24,72,4],[28,74,4],[32,69,8],[44,72,4],
+  [48,76,6],[56,79,4],[60,81,4],[64,79,6],[72,76,4],[76,74,4],[80,72,10],[92,69,4]];
+function storyStep(st,t0,page){
+  const s=st&15,bar=(st>>4)&7,root=[33,33,29,31,33,33,28,28][bar];
+  if(s===0)mtone(mf(root+12),t0,1.7,'triangle',.07,0,600),mtone(mf(root+19),t0,1.7,'sine',.03,0);
+  if(s===0&&(bar&1)===0)mtone(105,t0,.5,'sine',.22,-55);
+  if(s===8)mtone(125,t0,.35,'sine',.14,-60);
+  if(page>0){if(s===4||s===12)mnoise(t0,.08,.05,2500);if(s%4===2)mnoise(t0,.03,.025,6500)}
+  for(const m of S_MEL)if(m[0]===(st%96)){
+    const d=m[2]*60/84/4*1.1;
+    mtone(mf(m[1]),t0,d,'triangle',.05,0,2400);mtone(mf(m[1])*2,t0,d*.6,'sine',.012,0);
+  }
+}
 function musTick(){
   if(!ac)return;
-  if(state!=='play'&&state!=='night'){musStop();return}
+  if(state!=='play'&&state!=='night'&&state!=='story'){musStop();return}
   if(paused||muted){MUS.next=ac.currentTime+.1;return}
+  if(state==='story'){
+    while(MUS.next<ac.currentTime+.2){storyStep(MUS.step,MUS.next,storyPage);MUS.next+=60/84/4;MUS.step++}
+    return;
+  }
   const lvl=state==='night'?(t>=CFG.nightPhaseAt?2:1):(t>=CFG.bossAt?2:t>=CFG.phaseAt?1:0),bpm=[112,132,150][lvl];
   while(MUS.next<ac.currentTime+.2){
     musStep(MUS.step,MUS.next,lvl);
@@ -2071,13 +2089,13 @@ function startNight(){
   state='night';t=0;bats=[];rings=[];flashes=[];lp=null;nSpawn=.4;nPhase2=false;nEnding=false;nEndT=0;
   parts=[];floaters=[];announce=2.4;annMsg=['收服夜婆精！','在牠消失前，用手指畫圈圈住牠'];
   ns.caught=0;ns.timeout=0;ns.incomplete=0;ns.boss=0;nSlot=0;nboss=null;nbDead=false;
-  initNightAssets();musStart();sfx.alarm();
+  initNightAssets();musStop();musStart();sfx.alarm();
 }
 function enterStory(){
   state='story';storyPage=0;storyT=0;paused=false;
   bombs=[];charms=[];parts=[];floaters=[];trail=[];fxBooms=[];bgBooms=[];decorBombs=[];
   cake=null;cakeG=null;eater=null;boss.on=false;flash=0;
-  initNightAssets();musStop();sfx.egg();
+  initNightAssets();musStop();musStart();sfx.egg();
 }
 function endNight(){
   bonusPlayed=true;bats=[];lp=null;nboss=null;
