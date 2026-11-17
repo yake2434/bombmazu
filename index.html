@@ -184,10 +184,10 @@ function storyStep(st,t0,page){
 }
 function musTick(){
   if(!ac)return;
-  if(state!=='play'&&state!=='night'&&state!=='story'){musStop();return}
+  if(state!=='play'&&state!=='night'&&state!=='story'&&state!=='title'){musStop();return}
   if(paused||muted){MUS.next=ac.currentTime+.1;return}
-  if(state==='story'){
-    while(MUS.next<ac.currentTime+.2){storyStep(MUS.step,MUS.next,storyPage);MUS.next+=60/84/4;MUS.step++}
+  if(state==='story'||state==='title'){
+    while(MUS.next<ac.currentTime+.2){storyStep(MUS.step,MUS.next,state==='title'?1:storyPage);MUS.next+=60/84/4;MUS.step++}
     return;
   }
   const lvl=state==='night'?(t>=CFG.nightPhaseAt?2:1):(t>=CFG.bossAt?2:t>=CFG.phaseAt?1:0),bpm=[112,132,150][lvl];
@@ -674,7 +674,7 @@ function reset(){
   Object.assign(boss,{on:false,dead:false,dieT:0,x:-140,dir:1,hp:CFG.bossHP,hit:0,nb:1.2});
   bonusUnlocked=false;bonusPlayed=false;loseNight=false;bats=[];rings=[];flashes=[];lp=null;nEnding=false;BTN.y=404;ns.caught=0;ns.timeout=0;ns.incomplete=0;
 }
-function startGame(){reset();state='play';musStart()}
+function startGame(){reset();state='play';musStop();musStart()}
 function startBonusTest(){reset();bonusUnlocked=true;state='play';enterStory()}
 
 function planeSpeed(p){
@@ -1410,7 +1410,7 @@ function drawTitle(){
     else{R('#ffd24a',54,y-12,24,24);R('#2b0f0a',56,y-10,20,20);R('#ffd24a',65,y-7,2,8);R('#ffd24a',65,y,6,2)}
     txt(L[i][1],96,y,15,'#fff3d0','left','#1a0606',4);
   }
-  if(Math.floor(clock*2)%2)txt('— 點擊畫面開始 —',200,552,22,'#fff','center','#7a1010',6);
+  if(Math.floor(clock*2)%2)txt(ac&&ac.state==='running'?'— 點擊畫面開始 —':'— 點擊畫面開啟音樂 —',200,552,22,'#fff','center','#7a1010',6);
   if(CFG.testButton){
     R('#1a0a28',TESTBTN.x-2,TESTBTN.y-2,TESTBTN.w+4,TESTBTN.h+4);R('#7a48a8',TESTBTN.x,TESTBTN.y,TESTBTN.w,TESTBTN.h);
     R('#4a2868',TESTBTN.x,TESTBTN.y+TESTBTN.h-4,TESTBTN.w,4);
@@ -2310,13 +2310,16 @@ function togglePause(){
 }
 let linkDown=null;
 cv.addEventListener('pointerdown',e=>{
-  e.preventDefault();audioInit();
+  e.preventDefault();
+  const wasRunning=!!(ac&&ac.state==='running');audioInit();
   linkDown=linkAt(pos(e));if(linkDown)return;
   try{cv.setPointerCapture(e.pointerId)}catch(_){}
   const p=pos(e);
   if(p.x>=358&&p.y<40){muted=!muted;return}
   if((state==='play'||state==='night')&&p.x>=322&&p.x<358&&p.y<40){togglePause();return}
-  if(state==='title'){if(CFG.testButton&&inRect(p,TESTBTN)){startBonusTest();return}startGame();ptrs.set(e.pointerId,{x:p.x,y:p.y,dx:0,dy:0});return}
+  if(state==='title'){if(CFG.testButton&&inRect(p,TESTBTN)){startBonusTest();return}
+    if(!wasRunning){musStart();return}      // 瀏覽器需先互動才能出聲：第一次點擊先開啟標題音樂
+    startGame();ptrs.set(e.pointerId,{x:p.x,y:p.y,dx:0,dy:0});return}
   if(state==='story'){
     if(storyPage===0){if(storyDone()){storyPage=1;storyT=0}else storyT=1e4}
     else if(storyT>.5&&inRect(p,STORY_BTN))startNight();
@@ -2375,6 +2378,7 @@ function frame(ts){
 }
 reset();
 resize();
+audioInit();musStart();      // 標題畫面音樂（若瀏覽器擋自動播放，第一次點擊後才會出聲）
 if(location.hash==='#bonus'){bonusUnlocked=true;score=500;state='play';enterStory()}   // 網址加 #bonus 可直接測試隱藏關卡
 requestAnimationFrame(frame);
 /*DEBUG_HOOK*/
