@@ -7,7 +7,7 @@
 
 <!-- 放一張遊戲截圖或 GIF -->
 <p align="center">
-  <img src="docs/遊戲畫面.jpg" width="240" alt="標題畫面">
+  <img src="docs/遊戲畫面.jpg" width="480" alt="標題畫面">
 </p>
 
 ---
